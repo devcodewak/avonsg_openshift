@@ -19,7 +19,7 @@
 - 修改logger包，加入none及null选项，便于server端命令行模式时，使用-log none关闭所有提示  
 
 
-#### Thanks yinqiwen :  
+#### Thanks : yinqiwen  
 <https://github.com/yinqiwen/gsnova>  
   
   
