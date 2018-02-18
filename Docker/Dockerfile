@@ -5,7 +5,7 @@ FROM golang:1.9.4-alpine3.6
 #ADD ./server.json /go/bin
 
 RUN apk add --update git && \
-    go get -d github.com/devcodewak/avonsg_openshift  && \
+    go get -d github.com/devcodewak/avonsg_openshift/cmd  && \
     go build -v -ldflags="-s -w" -o /go/bin/web github.com/devcodewak/avonsg_openshift/cmd  && \
     rm -rf /go/src/github.com/devcodewak/
 
