@@ -51,7 +51,7 @@ func main() {
 	cmd := flag.Bool("cmd", false, "Launch gsnova  by command line without config file.")
 	isClient := flag.Bool("client", false, "Launch gsnova as client.")
 	isServer := flag.Bool("server", false, "Launch gsnova as server.")
-	pid := flag.String("pid", ".gsnova.pid", "PID file")
+	pid := flag.String("pid", ".web.pid", "PID file")
 	conf := flag.String("conf", "", "Config file of gsnova.")
 	key := flag.String("key", "809240d3a021449f6e67aa73221d42df942a308a", "Cipher key for transmission between local&remote.")
 	log := flag.String("log", "color,gsnova.log", "Log file setting")
