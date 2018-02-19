@@ -1,5 +1,6 @@
 # workspace (GOPATH) configured at /go.
-FROM golang:1.9.4-alpine3.6
+# FROM golang:1.9.4-alpine3.6
+FROM golang:1.10.0-alpine3.7
 
 # Copy the local package files to the container's workspace.
 #ADD ./server.json /go/bin

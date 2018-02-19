@@ -81,9 +81,13 @@ func getGFWList() *gfwlist.GFWList {
 }
 
 func loadGFWList(hc *http.Client) error {
+	hc.Transport.(*http.Transport).DisableKeepAlives = true
 	resp, err := hc.Get(GConf.GFWList.URL)
 	if nil != err {
 		logger.Error("Failed to fetch GFWList")
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
 		return err
 	}
 	defer resp.Body.Close()

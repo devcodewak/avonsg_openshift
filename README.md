@@ -5,19 +5,20 @@
 
 #### 修改项  
 
-基准：0.31.0 commit 0e3e110 jan 1,2018  
-目标：尝试规避openshift代理检查等  
-- 随机证书改为2048bit(1024)  
-- server端默认Mux.IdleTimeout改为1800(300)，即使无数据也保持长连接30分钟  
-- 仅在client模式时显示ASCIILogo，server模式时不显示  
-- remote.indexCallback改为http.StatusOK,即去掉原有https访问时的版本提示，规避检查需要  
-- 加大默认的Mux的MaxStreamWindow和StreamMinRefresh为原有4倍，即2048k和128k  
-- client模式时，显示心跳包延迟时间  
+目标：规避openshift代理检查等  
+基准：官方 0.31.0 commit 0e3e110 jan 1,2018  
 - 版本号r16_v31_M23G1  
+- 修改pid文件名  
+- 随机证书改为2048bit(1024)  
+- client模式时，显示心跳包延迟时间  
+- 仅在client模式时显示ASCIILogo，server模式时不显示  
+- server端默认Mux.IdleTimeout改为1800(300)，即使无数据也保持长连接30分钟  
+- 加大默认的Mux的MaxStreamWindow和StreamMinRefresh为原有4倍，即2048k和128k  
 - 增加key的环境变量AVONSG_CIPHER_KEY，也保留原有GSNOVA_CIPHER_KEY，规避检查需要  
+- remote.indexCallback改为http.StatusOK,即去掉原有https访问时的版本提示，规避检查需要  
 - 加入logger.Printf，修改所有包log.Printf为logger调用  
 - 修改logger包，加入none及null选项，便于server端命令行模式时，使用-log none关闭所有提示  
-
+- 修正loadGFWList长时间不释放https连接  
 
 
 #### Thanks : yinqiwen  
