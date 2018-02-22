@@ -19,6 +19,8 @@
 - 加入logger.Printf，修改所有包log.Printf为logger调用  
 - 修改logger包，加入none及null选项，便于server端命令行模式时，使用-log none关闭所有提示  
 - 修正loadGFWList长时间不释放https连接  
+- 增加环境变量AVONSG_CIPHER_USER，仅用于服务端鉴权，优先级高于命令行和json  
+
 
 
 #### Thanks : yinqiwen  

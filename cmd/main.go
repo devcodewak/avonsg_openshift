@@ -228,7 +228,13 @@ func main() {
 			remote.ServerConf.Cipher.Key = cipherKey
 			logger.Notice("Server cipher key overide by env:AVONSG_CIPHER_KEY")
 		}
+
 		channel.SetDefaultMuxConfig(remote.ServerConf.Mux)
+		cipherUser := os.Getenv("AVONSG_CIPHER_USER")
+		if len(cipherUser) > 0 {
+			remote.ServerConf.Cipher.User = cipherUser
+			logger.Notice("Server cipher user overide by env:AVONSG_CIPHER_USER")
+		}
 		channel.DefaultServerCipher = remote.ServerConf.Cipher
 		remote.ServerConf.Cipher.AllowUsers(remote.ServerConf.Cipher.User)
 
