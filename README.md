@@ -7,7 +7,7 @@
 
 目标：规避openshift代理检查等  
 基准：官方 0.31.0 commit 0e3e110 jan 1,2018  
-- 版本号r16_v31_M23G1  
+- 版本号r16_v31_M23G1 docker 0223.1  
 - 修改pid文件名  
 - 随机证书改为2048bit(1024)  
 - client模式时，显示心跳包延迟时间  
@@ -20,7 +20,7 @@
 - 修改logger包，加入none及null选项，便于server端命令行模式时，使用-log none关闭所有提示  
 - 修正loadGFWList长时间不释放https连接  
 - 增加环境变量AVONSG_CIPHER_USER，仅用于服务端鉴权，优先级高于命令行和json  
-
+- 修正AllowUsers鉴权失效问题  
 
 
 #### Thanks : yinqiwen  
