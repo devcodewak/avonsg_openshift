@@ -7,7 +7,7 @@
 
 目标：规避openshift代理检查等  
 基准：官方 0.31.0 commit cd936c6 Feb 23,2018  
-- 版本号r16_v31_M23G1 docker 0225.1  
+- 版本号r16_v31_M23G1 docker 0227  
 - 修改pid文件名  
 - 随机证书改为2048bit(1024)  
 - client模式时，显示心跳包延迟时间  
