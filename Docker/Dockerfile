@@ -1,17 +1,18 @@
-# workspace (GOPATH) configured at /go.
 # FROM golang:1.9.4-alpine3.6
-FROM golang:1.10.0-alpine3.7
-
-# Copy the local package files to the container's workspace.
-#ADD ./server.json /go/bin
+FROM golang:1.10.0-alpine3.7 as builder
 
 RUN apk add --update git && \
     go get -d github.com/devcodewak/avonsg_openshift/cmd  && \
-    go build -ldflags="-s -w" -o /go/bin/web github.com/devcodewak/avonsg_openshift/cmd  && \
-    rm -rf /go/src/github.com/
+    go build -ldflags="-s -w" -o /go/bin/web github.com/devcodewak/avonsg_openshift/cmd
 
-#WORKDIR /go/bin
-# Run the outyet command by default when the container starts.
-CMD ["/go/bin/web", "-server", "-cmd", "-key", "809240d3a021449f6e67aa73221d42df942a308a", "-http2", ":8443", "-http", ":8444", "-log", "null"]
-# Document that the service listens on port 8443.
+
+	
+FROM alpine:3.7
+
+WORKDIR /bin/
+
+COPY --from=builder /go/bin/web
+
+CMD ["/bin/web", "-server", "-cmd", "-key", "809240d3a021449f6e67aa73221d42df942a308a", "-http2", ":8443", "-http", ":8444", "-log", "null"]
+
 EXPOSE 8443 8444
