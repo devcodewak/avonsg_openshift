@@ -11,7 +11,9 @@ FROM alpine:3.7
 
 WORKDIR /bin/
 
-COPY --from=builder /go/bin/web
+COPY --from=builder /go/bin/web .
+
+RUN web -version
 
 CMD ["/bin/web", "-server", "-cmd", "-key", "809240d3a021449f6e67aa73221d42df942a308a", "-http2", ":8443", "-http", ":8444", "-log", "null"]
 
