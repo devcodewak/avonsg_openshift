@@ -235,10 +235,10 @@ START:
 		for {
 			select {
 			case <-timeoutTicker.C:
-				if time.Now().Sub(stream.LatestIOTime()) > 10*time.Second {
+				if time.Now().Sub(stream.LatestIOTime()) > 90*time.Second {
 					localConn.Close()
 					stream.Close()
-					logger.Error("Close stream[%d] since it's not active since %v ago.", ssid, time.Now().Sub(stream.LatestIOTime()))
+					logger.Notice("Close stream[%d] since it's not active since %v ago.", ssid, time.Now().Sub(stream.LatestIOTime()))
 					return
 				}
 			case <-stopTicker:

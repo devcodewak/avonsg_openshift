@@ -1,6 +1,6 @@
 
 
-### gsnova 0.31.0 修改版，用于openshift v3 docker部署  
+### gsnova 0.32.0 修改版，用于openshift v3 docker部署  
 
 
 #### 修改项  
@@ -22,6 +22,7 @@
 - 增加环境变量AVONSG_CIPHER_USER，仅用于服务端鉴权，优先级高于命令行和json  
 - 修正AllowUsers鉴权失效问题
 - 同步官方cd936c6,增加HibernateAfterSecs参数，客户端默认30分钟无数据时关闭muxSession    
+- 加大 local_server 内置10秒无活动传输断开时间为90秒    
 
 
 #### Thanks : yinqiwen  
