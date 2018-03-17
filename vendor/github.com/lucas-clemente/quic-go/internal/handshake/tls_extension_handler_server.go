@@ -10,6 +10,7 @@ import (
 	"github.com/bifurcation/mint"
 	"github.com/bifurcation/mint/syntax"
 	"github.com/lucas-clemente/quic-go/internal/protocol"
+	"github.com/lucas-clemente/quic-go/internal/utils"
 )
 
 type extensionHandlerServer struct {
@@ -29,6 +30,8 @@ func NewExtensionHandlerServer(
 	supportedVersions []protocol.VersionNumber,
 	version protocol.VersionNumber,
 ) TLSExtensionHandler {
+	// Processing the ClientHello is performed statelessly (and from a single go-routine).
+	// Therefore, we have to use a buffered chan to pass the transport parameters to that go routine.
 	paramsChan := make(chan TransportParameters, 1)
 	return &extensionHandlerServer{
 		ourParams:         params,
@@ -53,6 +56,7 @@ func (h *extensionHandlerServer) Send(hType mint.HandshakeType, el *mint.Extensi
 	for i, v := range supportedVersions {
 		versions[i] = uint32(v)
 	}
+	utils.Debugf("Sending Transport Parameters: %s", h.ourParams)
 	data, err := syntax.Marshal(encryptedExtensionsTransportParameters{
 		NegotiatedVersion: uint32(h.version),
 		SupportedVersions: versions,
@@ -104,6 +108,7 @@ func (h *extensionHandlerServer) Receive(hType mint.HandshakeType, el *mint.Exte
 	if err != nil {
 		return err
 	}
+	utils.Debugf("Received Transport Parameters: %s", params)
 	h.paramsChan <- *params
 	return nil
 }

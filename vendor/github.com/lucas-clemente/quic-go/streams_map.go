@@ -35,6 +35,8 @@ var _ streamManager = &streamsMap{}
 func newStreamsMap(
 	sender streamSender,
 	newFlowController func(protocol.StreamID) flowcontrol.StreamFlowController,
+	maxIncomingStreams int,
+	maxIncomingUniStreams int,
 	perspective protocol.Perspective,
 	version protocol.VersionNumber,
 ) streamManager {
@@ -46,7 +48,7 @@ func newStreamsMap(
 	var firstOutgoingBidiStream, firstOutgoingUniStream, firstIncomingBidiStream, firstIncomingUniStream protocol.StreamID
 	if perspective == protocol.PerspectiveServer {
 		firstOutgoingBidiStream = 1
-		firstIncomingBidiStream = 4 // the crypto stream is handled separatedly
+		firstIncomingBidiStream = 4 // the crypto stream is handled separately
 		firstOutgoingUniStream = 3
 		firstIncomingUniStream = 2
 	} else {
@@ -69,11 +71,10 @@ func newStreamsMap(
 		newBidiStream,
 		sender.queueControlFrame,
 	)
-	// TODO(#523): make these values configurable
 	m.incomingBidiStreams = newIncomingBidiStreamsMap(
 		firstIncomingBidiStream,
-		protocol.MaxBidiStreamID(protocol.MaxIncomingStreams, perspective),
-		protocol.MaxIncomingStreams,
+		protocol.MaxBidiStreamID(maxIncomingStreams, perspective),
+		maxIncomingStreams,
 		sender.queueControlFrame,
 		newBidiStream,
 	)
@@ -82,11 +83,10 @@ func newStreamsMap(
 		newUniSendStream,
 		sender.queueControlFrame,
 	)
-	// TODO(#523): make these values configurable
 	m.incomingUniStreams = newIncomingUniStreamsMap(
 		firstIncomingUniStream,
-		protocol.MaxUniStreamID(protocol.MaxIncomingStreams, perspective),
-		protocol.MaxIncomingStreams,
+		protocol.MaxUniStreamID(maxIncomingUniStreams, perspective),
+		maxIncomingUniStreams,
 		sender.queueControlFrame,
 		newUniReceiveStream,
 	)

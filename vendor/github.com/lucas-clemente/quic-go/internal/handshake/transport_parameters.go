@@ -20,6 +20,8 @@ type TransportParameters struct {
 	StreamFlowControlWindow     protocol.ByteCount
 	ConnectionFlowControlWindow protocol.ByteCount
 
+	MaxPacketSize protocol.ByteCount
+
 	MaxBidiStreamID protocol.StreamID // only used for IETF QUIC
 	MaxUniStreamID  protocol.StreamID // only used for IETF QUIC
 	MaxStreams      uint32            // only used for gQUIC
@@ -137,6 +139,15 @@ func readTransportParamters(paramsList []transportParameter) (*TransportParamete
 				return nil, fmt.Errorf("wrong length for omit_connection_id: %d (expected empty)", len(p.Value))
 			}
 			params.OmitConnectionID = true
+		case maxPacketSizeParameterID:
+			if len(p.Value) != 2 {
+				return nil, fmt.Errorf("wrong length for max_packet_size: %d (expected 2)", len(p.Value))
+			}
+			maxPacketSize := protocol.ByteCount(binary.BigEndian.Uint16(p.Value))
+			if maxPacketSize < 1200 {
+				return nil, fmt.Errorf("invalid value for max_packet_size: %d (minimum 1200)", maxPacketSize)
+			}
+			params.MaxPacketSize = maxPacketSize
 		}
 	}
 
@@ -173,4 +184,10 @@ func (p *TransportParameters) getTransportParameters() []transportParameter {
 		params = append(params, transportParameter{omitConnectionIDParameterID, []byte{}})
 	}
 	return params
+}
+
+// String returns a string representation, intended for logging.
+// It should only used for IETF QUIC.
+func (p *TransportParameters) String() string {
+	return fmt.Sprintf("&handshake.TransportParameters{StreamFlowControlWindow: %#x, ConnectionFlowControlWindow: %#x, MaxBidiStreamID: %d, MaxUniStreamID: %d, OmitConnectionID: %t, IdleTimeout: %s}", p.StreamFlowControlWindow, p.ConnectionFlowControlWindow, p.MaxBidiStreamID, p.MaxUniStreamID, p.OmitConnectionID, p.IdleTimeout)
 }
