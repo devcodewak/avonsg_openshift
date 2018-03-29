@@ -65,16 +65,16 @@ func main() {
 	var hops channel.HopServers
 	home, _ := filepath.Split(path)
 	hosts := flag.String("hosts", "./hosts.json", "Hosts file of gsnova client.")
-	listen := flag.String("listen", ":48100", "Local client listen address")
+	//listen := flag.String("listen", ":48100", "Local client listen address")
 	flag.Var(&hops, "hop", "Next proxy hop server to connect for client, eg:wss://xxx.paas.com")
 
+	//client or server listen
+	var listens channel.HopServers
+	flag.Var(&listens, "listen", "Listen on address.")
+
 	//server options
-	httpServer := flag.String("http", "", "Remote HTTP/Websocket proxy server listen address")
-	http2Server := flag.String("http2", "", "Remote HTTP2 proxy server listen address")
-	tcpServer := flag.String("tcp", "", "Remote TCP proxy server listen address")
-	quicServer := flag.String("quic", "", "Remote QUIC proxy server listen address")
-	kcpServer := flag.String("kcp", "", "Remote KCP proxy server listen address")
-	tlsServer := flag.String("tls", "", "Remote TLS proxy server listen address")
+	tlsKey := flag.String("tls.key", "", "TLS Key file")
+	tlsCert := flag.String("tls.cert", "", "TLS Cert file")
 
 	flag.Parse()
 
@@ -117,15 +117,23 @@ func main() {
 				flag.PrintDefaults()
 				return
 			}
+			if len(listens) == 0 {
+				logger.Error("At least one -listen argument required.", err)
+				flag.PrintDefaults()
+				return
+			}
 			local.GConf.Mux.MaxStreamWindow = *window
 			local.GConf.Mux.StreamMinRefresh = *windowRefresh
 			local.GConf.Cipher.Key = *key
 			local.GConf.Cipher.Method = "auto"
 			local.GConf.Cipher.User = *user
 			local.GConf.Log = strings.Split(*log, ",")
-			proxyConf := local.ProxyConfig{}
-			proxyConf.Local = *listen
-			proxyConf.PAC = []local.PACConfig{{Remote: "default"}}
+			for _, lis := range listens {
+				proxyConf := local.ProxyConfig{}
+				proxyConf.Local = lis
+				proxyConf.PAC = []local.PACConfig{{Remote: "default"}}
+				local.GConf.Proxy = append(local.GConf.Proxy, proxyConf)
+			}
 			ch := channel.ProxyChannelConfig{}
 			ch.Enable = true
 			ch.Name = "default"
@@ -133,7 +141,7 @@ func main() {
 			ch.HeartBeatPeriod = *pingInterval
 			ch.ServerList = []string{hops[0]}
 			ch.Hops = hops[1:]
-			local.GConf.Proxy = []local.ProxyConfig{proxyConf}
+
 			local.GConf.Channel = []channel.ProxyChannelConfig{ch}
 			options.WatchConf = false
 			err = local.Start(options)
@@ -152,6 +160,11 @@ func main() {
 		//run as server
 		remote.InitDefaultConf()
 		if !(*cmd) {
+			if len(listens) == 0 {
+				logger.Error("At least one -listen argument required.", err)
+				flag.PrintDefaults()
+				return
+			}
 			if len(confile) == 0 {
 				confile = "./server.json"
 			}
@@ -170,23 +183,27 @@ func main() {
 			}
 		}
 		if *cmd {
-			if len(*httpServer) > 0 {
-				remote.ServerConf.HTTP.Listen = *httpServer
-			}
-			if len(*tcpServer) > 0 {
-				remote.ServerConf.TCP.Listen = *tcpServer
-			}
-			if len(*quicServer) > 0 {
-				remote.ServerConf.QUIC.Listen = *quicServer
-			}
-			if len(*kcpServer) > 0 {
-				remote.ServerConf.KCP.Listen = *kcpServer
-			}
-			if len(*http2Server) > 0 {
-				remote.ServerConf.HTTP2.Listen = *http2Server
-			}
-			if len(*tlsServer) > 0 {
-				remote.ServerConf.TLS.Listen = *tlsServer
+			for _, lis := range listens {
+				var lisCfg remote.ServerListenConfig
+				lisCfg.Listen = lis
+				if len(*tlsCert) > 0 && len(*tlsKey) > 0 {
+					lisCfg.Cert = *tlsCert
+					lisCfg.Key = *tlsKey
+				}
+				lisCfg.KCParams.InitDefaultConf()
+				config := &lisCfg.KCParams
+				switch config.Mode {
+				case "normal":
+					config.NoDelay, config.Interval, config.Resend, config.NoCongestion = 0, 40, 2, 1
+				case "fast":
+					config.NoDelay, config.Interval, config.Resend, config.NoCongestion = 0, 30, 2, 1
+				case "fast2":
+					config.NoDelay, config.Interval, config.Resend, config.NoCongestion = 1, 20, 2, 1
+				case "fast3":
+					config.NoDelay, config.Interval, config.Resend, config.NoCongestion = 1, 10, 2, 1
+				}
+
+				remote.ServerConf.Server = append(remote.ServerConf.Server, lisCfg)
 			}
 			if len(*key) > 0 {
 				remote.ServerConf.Cipher.Key = *key
@@ -202,19 +219,6 @@ func main() {
 			}
 			if len(*windowRefresh) > 0 {
 				remote.ServerConf.Mux.StreamMinRefresh = *windowRefresh
-			}
-		}
-		if len(remote.ServerConf.KCP.Listen) > 0 {
-			config := &remote.ServerConf.KCP.Params
-			switch config.Mode {
-			case "normal":
-				config.NoDelay, config.Interval, config.Resend, config.NoCongestion = 0, 40, 2, 1
-			case "fast":
-				config.NoDelay, config.Interval, config.Resend, config.NoCongestion = 0, 30, 2, 1
-			case "fast2":
-				config.NoDelay, config.Interval, config.Resend, config.NoCongestion = 1, 20, 2, 1
-			case "fast3":
-				config.NoDelay, config.Interval, config.Resend, config.NoCongestion = 1, 10, 2, 1
 			}
 		}
 

@@ -25,7 +25,7 @@ type Session struct {
 	config       *Config
 	conn         io.ReadWriteCloser
 	connReader   *bufio.Reader
-	connWriter   *bufio.Writer
+	connWriter   io.Writer
 	// bufRead is a buffered reader
 	//bufRead  *bufio.Reader
 	//streams    map[uint32]*Stream
@@ -347,9 +347,6 @@ func (s *Session) send() {
 					break
 				}
 			}
-			if nil == err {
-				s.connWriter.Flush()
-			}
 		}
 		for _, frame := range frs {
 			if nil != frame.Err {
@@ -458,7 +455,7 @@ func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
 		// logger:     logger.New(config.LogOutput, "", logger.LstdFlags),
 		conn:       conn,
 		connReader: bufio.NewReader(conn),
-		connWriter: bufio.NewWriter(conn),
+		connWriter: conn,
 		// pings:      make(map[uint32]chan struct{}),
 		//streams: make(map[uint32]*Stream),
 		// inflight:   make(map[uint32]struct{}),

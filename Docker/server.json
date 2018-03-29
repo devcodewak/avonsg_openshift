@@ -1,0 +1,47 @@
+{
+	"AdminListen": "127.0.0.1:60000",
+	"DialTimeout": 15,
+	"UDPReadTimeout": 30,
+	"Log": ["server.log"],
+	//cipher config
+	"Cipher":{
+		"Key":"809240d3a021449f6e67aa73221d42df942a308a",
+		//AllowedUser
+		"User": "*,gsnova"
+	},
+	"Mux":{
+		"MaxStreamWindow": "2048K",
+		"StreamMinRefresh":"128K",
+		"StreamIdleTimeout":90,
+		"SessionIdleTimeout":1800
+	},
+	"Server":[
+		{
+			"Listen":"tcp://:48100"
+		},
+		{
+			"Listen":"quic://:48100"
+		},
+		{
+			"Listen":"http://:48101"
+		},
+		{
+			"Listen":"kcp://:48101",
+			"KCParams":{
+				"Mode":"fast2"
+			}
+		},
+		{
+			"Listen":"tls://:48102",
+            "Key": "",
+			"Cert":""
+			///"Key":"/etc/letsencrypt/live/testdomain.tk/privkey.pem",
+	        //"Cert":"/etc/letsencrypt/live/testdomain.tk/fullchain.pem"
+		},
+		{
+			"Listen":"http2//:48103",
+			"Key": "",
+			"Cert":""
+		}
+	]
+}

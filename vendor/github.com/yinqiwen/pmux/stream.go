@@ -44,6 +44,8 @@ type Stream struct {
 
 	readDeadline  time.Time
 	writeDeadline time.Time
+
+	IOCallback IOCallback
 }
 
 // newStream is used to construct a new stream within
@@ -87,7 +89,11 @@ START:
 			// Read any bytes
 			n := len(b)
 			atomic.AddUint32(&s.deltaWindow, uint32(n))
+			s.updateRemoteSendWindow()
 			_, err := w.Write(b)
+			if s.IOCallback != nil {
+				s.IOCallback.OnIO(true)
+			}
 			if nil != err {
 				return total, err
 			}
@@ -95,7 +101,6 @@ START:
 			break
 		}
 	}
-	s.updateRemoteSendWindow()
 WAIT:
 	var timeout <-chan time.Time
 	var timer *time.Timer
@@ -129,10 +134,12 @@ START:
 
 	// Read any bytes
 	n, _ = s.recvBuf.Read(b)
-	atomic.AddUint32(&s.deltaWindow, uint32(n))
 	s.recvLock.Unlock()
+	atomic.AddUint32(&s.deltaWindow, uint32(n))
 	s.updateRemoteSendWindow()
-
+	if s.IOCallback != nil {
+		s.IOCallback.OnIO(true)
+	}
 	return n, nil
 WAIT:
 	var timeout <-chan time.Time
@@ -197,6 +204,9 @@ func (s *Stream) Write(p []byte) (int, error) {
 	for total < len(p) {
 		//logger.Printf("[Stream]Write data %d %d", total, len(p))
 		n, err := s.write(p[total:])
+		if s.IOCallback != nil {
+			s.IOCallback.OnIO(false)
+		}
 		total += n
 		if err != nil {
 			return total, err
