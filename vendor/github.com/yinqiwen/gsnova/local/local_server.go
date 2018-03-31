@@ -18,22 +18,37 @@ import (
 	"github.com/yinqiwen/gsnova/common/logger"
 	"github.com/yinqiwen/gsnova/common/mux"
 	"github.com/yinqiwen/gsnova/common/socks"
+	"github.com/yinqiwen/pmux"
 )
 
 var proxyServerRunning = true
-
 var runningProxyStreamCount int64
-var runningProxyConns sync.Map
+var activeStreams sync.Map
+
+func isTimeoutErr(err error) bool {
+	if err == pmux.ErrTimeout {
+		return true
+	}
+	if err, ok := err.(net.Error); ok && err.Timeout() {
+		return true
+	}
+	return false
+}
+
+type proxyStreamContext struct {
+	stream mux.MuxStream
+	c      io.ReadWriteCloser
+}
 
 func serveProxyConn(conn net.Conn, remoteHost, remotePort string, proxy *ProxyConfig) {
 	var proxyChannelName string
 	protocol := "tcp"
 	localConn := conn
 	atomic.AddInt64(&runningProxyStreamCount, 1)
-	runningProxyConns.Store(conn, true)
+	//runningProxyConns.Store(conn, true)
 	defer localConn.Close()
 	defer atomic.AddInt64(&runningProxyStreamCount, -1)
-	defer runningProxyConns.Delete(conn)
+	//defer runningProxyConns.Delete(conn)
 
 	isSocksProxy := false
 	isHttpsProxy := false
@@ -194,6 +209,7 @@ START:
 		return
 	}
 	defer stream.Close()
+
 	ssid := stream.StreamID()
 	opt := mux.StreamOptions{
 		DialTimeout: conf.RemoteDialMSTimeout,
@@ -221,6 +237,15 @@ START:
 	localConn.SetReadDeadline(zero)
 	streamReader, streamWriter := mux.GetCompressStreamReaderWriter(stream, conf.Compressor)
 
+	streamCtx := &proxyStreamContext{}
+	streamCtx.stream = stream
+	streamCtx.c = localConn
+	activeStreams.Store(streamCtx, true)
+
+	maxIdleTime := time.Duration(GConf.Mux.StreamIdleTimeout) * time.Second
+	if maxIdleTime == 0 {
+		maxIdleTime = 10 * time.Second
+	}
 	closeCh := make(chan int, 1)
 	go func() {
 		buf := make([]byte, 128*1024)
@@ -229,31 +254,18 @@ START:
 	}()
 
 	//start task to check stream timeout(if the stream has no read&write action more than 10s)
-	timeoutTicker := time.NewTicker(2 * time.Second)
-	stopTicker := make(chan bool, 1)
-	go func() {
-		maxIdleTime := time.Duration(GConf.Mux.StreamIdleTimeout) * time.Second
-		if maxIdleTime == 0 {
-			maxIdleTime = 10 * time.Second
-		}
 
-		for {
-			select {
-			case <-timeoutTicker.C:
-				if time.Now().Sub(stream.LatestIOTime()) > maxIdleTime {
-					localConn.Close()
-					stream.Close()
-					logger.Notice("Close stream[%d] since it's not active since %v ago.", ssid, time.Now().Sub(stream.LatestIOTime()))
-					return
-				}
-			case <-stopTicker:
-				return
-			}
-		}
-	}()
 	if (isSocksProxy || isHttpsProxy || isTransparentProxy) && nil == initialHTTPReq {
 		buf := make([]byte, 128*1024)
-		io.CopyBuffer(streamWriter, bufconn, buf)
+		for {
+			localConn.SetReadDeadline(time.Now().Add(maxIdleTime))
+			_, cerr := io.CopyBuffer(streamWriter, bufconn, buf)
+			if isTimeoutErr(cerr) && time.Now().Sub(stream.LatestIOTime()) < maxIdleTime {
+				continue
+			}
+			break
+		}
+
 		if close, ok := streamWriter.(io.Closer); ok {
 			close.Close()
 		}
@@ -271,8 +283,15 @@ START:
 				}
 			}
 			prevReq := proxyReq
-			//localConn.SetReadDeadline(time.Now().Add(5 * time.Second))
-			proxyReq, err = http.ReadRequest(bufconn)
+			for {
+				localConn.SetReadDeadline(time.Now().Add(maxIdleTime))
+				proxyReq, err = http.ReadRequest(bufconn)
+				if isTimeoutErr(err) && time.Now().Sub(stream.LatestIOTime()) < maxIdleTime {
+					continue
+				}
+				break
+			}
+
 			if nil != err {
 				if err, ok := err.(net.Error); ok && err.Timeout() {
 
@@ -290,7 +309,7 @@ START:
 		}
 	}
 	<-closeCh
-	close(stopTicker)
+	activeStreams.Delete(streamCtx)
 }
 
 func startLocalProxyServer(proxyIdx int) (*net.TCPListener, error) {
@@ -366,10 +385,10 @@ func stopLocalServers() {
 	}
 	//closeAllProxySession()
 	closeAllUDPSession()
-	runningProxyConns.Range(func(key, value interface{}) bool {
-		conn := key.(net.Conn)
-		if nil != conn {
-			conn.Close()
+	activeStreams.Range(func(key, value interface{}) bool {
+		ctx := key.(proxyStreamContext)
+		if nil != ctx.c {
+			ctx.c.Close()
 		}
 		return true
 	})

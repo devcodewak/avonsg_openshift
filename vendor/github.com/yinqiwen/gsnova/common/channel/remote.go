@@ -4,6 +4,8 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yinqiwen/pmux"
@@ -14,9 +16,57 @@ import (
 
 type sessionContext struct {
 	activeIOTime time.Time
+	streamCouter int32
+	session      mux.MuxSession
+	closed       bool
+}
+
+func (ctx *sessionContext) close() {
+	ctx.closed = true
+	ctx.session.Close()
+	emptySessions.Delete(ctx)
+}
+
+var emptySessions sync.Map
+
+func init() {
+	go func() {
+		if defaultMuxConfig.SessionIdleTimeout > 0 {
+			sessionActiveTicker := time.NewTicker(10 * time.Second)
+			for range sessionActiveTicker.C {
+				emptySessions.Range(func(key, value interface{}) bool {
+					ctx := key.(*sessionContext)
+					ago := time.Now().Sub(ctx.activeIOTime)
+					if ago > time.Duration(defaultMuxConfig.SessionIdleTimeout)*time.Second {
+						ctx.close()
+						logger.Error("Close mux session since it's not active since %v ago.", ago)
+					}
+					return true
+				})
+			}
+		}
+	}()
+}
+
+func isTimeoutErr(err error) bool {
+	if err == pmux.ErrTimeout {
+		return true
+	}
+	if err, ok := err.(net.Error); ok && err.Timeout() {
+		return true
+	}
+	return false
 }
 
 func handleProxyStream(stream mux.MuxStream, auth *mux.AuthRequest, ctx *sessionContext) {
+	atomic.AddInt32(&ctx.streamCouter, 1)
+	emptySessions.Delete(ctx)
+	defer func() {
+		if 0 == atomic.AddInt32(&ctx.streamCouter, -1) && !ctx.closed {
+			emptySessions.Store(ctx, true)
+		}
+	}()
+
 	creq, err := mux.ReadConnectRequest(stream)
 	if nil != err {
 		stream.Close()
@@ -25,6 +75,10 @@ func handleProxyStream(stream mux.MuxStream, auth *mux.AuthRequest, ctx *session
 	}
 	logger.Debug("[%d]Start handle stream:%v with comprresor:%s", stream.StreamID(), creq, auth.CompressMethod)
 
+	maxIdleTime := time.Duration(defaultMuxConfig.StreamIdleTimeout) * time.Second
+	if maxIdleTime == 0 {
+		maxIdleTime = 10 * time.Second
+	}
 	var c io.ReadWriteCloser
 	dialTimeout := creq.DialTimeout
 	if dialTimeout == 0 {
@@ -39,7 +93,7 @@ func handleProxyStream(stream mux.MuxStream, auth *mux.AuthRequest, ctx *session
 			if creq.ReadTimeout > 0 {
 				//connection need to set read timeout to avoid hang forever
 				readTimeout := time.Duration(creq.ReadTimeout) * time.Millisecond
-				conn.SetReadDeadline(time.Now().Add(readTimeout))
+				maxIdleTime = readTimeout
 			}
 			c = conn
 		}
@@ -76,6 +130,7 @@ func handleProxyStream(stream mux.MuxStream, auth *mux.AuthRequest, ctx *session
 	streamReader, streamWriter := mux.GetCompressStreamReaderWriter(stream, auth.CompressMethod)
 	defer c.Close()
 	closeSig := make(chan bool, 2)
+
 	go func() {
 		buf := make([]byte, 128*1024)
 		io.CopyBuffer(c, streamReader, buf)
@@ -83,35 +138,20 @@ func handleProxyStream(stream mux.MuxStream, auth *mux.AuthRequest, ctx *session
 	}()
 	go func() {
 		buf := make([]byte, 128*1024)
-		io.CopyBuffer(streamWriter, c, buf)
-		closeSig <- true
-	}()
-	timeoutTicker := time.NewTicker(2 * time.Second)
-	stopTicker := make(chan bool, 1)
-	go func() {
 		for {
-			maxIdleTime := time.Duration(defaultMuxConfig.StreamIdleTimeout) * time.Second
-			if maxIdleTime == 0 {
-				maxIdleTime = 10 * time.Second
+			if d, ok := c.(DeadLineAccetor); ok {
+				d.SetReadDeadline(time.Now().Add(maxIdleTime))
 			}
-			select {
-			case <-timeoutTicker.C:
-				if stream.LatestIOTime().After(ctx.activeIOTime) {
-					ctx.activeIOTime = stream.LatestIOTime()
-				}
-				if time.Now().Sub(stream.LatestIOTime()) > maxIdleTime {
-					c.Close()
-					stream.Close()
-					return
-				}
-			case <-stopTicker:
-				return
+			_, err := io.CopyBuffer(streamWriter, c, buf)
+			if isTimeoutErr(err) && time.Now().Sub(stream.LatestIOTime()) < maxIdleTime {
+				continue
 			}
+			break
 		}
+		closeSig <- true
 	}()
 
 	<-closeSig
-	close(stopTicker)
 
 	if close, ok := streamWriter.(io.Closer); ok {
 		close.Close()
@@ -127,23 +167,8 @@ func ServProxyMuxSession(session mux.MuxSession) error {
 	var authReq *mux.AuthRequest
 	ctx := &sessionContext{}
 	ctx.activeIOTime = time.Now()
-	defer session.Close()
-
-	if defaultMuxConfig.SessionIdleTimeout > 0 {
-		sessionActiveTicker := time.NewTicker(10 * time.Second)
-		defer sessionActiveTicker.Stop()
-
-		go func() {
-			for range sessionActiveTicker.C {
-				ago := time.Now().Sub(ctx.activeIOTime)
-				if ago > time.Duration(defaultMuxConfig.SessionIdleTimeout)*time.Second {
-					session.Close()
-					logger.Error("Close mux session since it's not active since %v ago.", ago)
-					return
-				}
-			}
-		}()
-	}
+	ctx.session = session
+	defer ctx.close()
 
 	for {
 		stream, err := session.AcceptStream()

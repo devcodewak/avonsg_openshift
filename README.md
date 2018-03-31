@@ -6,7 +6,7 @@
 #### 修改项  
 
 目标：规避openshift代理检查等  
-基准：官方 0.32.1 commit 95be5a5 Mar 25,2018  
+基准：官方 0.32.1 commit cee73a4 Mar 31,2018  
 - 版本号v32.1_M23G3_0329 docker 0329  
 - 修改pid文件名  
 - 随机证书改为2048bit(1024)  
@@ -26,6 +26,7 @@
 - ServerConf.Mux.StreamIdleTimeout = 90 // 10  
 - ServerConf.Mux.SessionIdleTimeout = 1800 //300  
 - 增加了server.json(docker未使用)，增加了client.json(仅参考)  
+- 同步至官方cee73a4  
 
 
 #### Thanks : yinqiwen  
