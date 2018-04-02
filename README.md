@@ -6,8 +6,8 @@
 #### 修改项  
 
 目标：规避openshift代理检查等  
-基准：官方 0.32.1 commit cee73a4 Mar 31,2018  
-- 版本号v32.1_M23G3_0329 docker 0329  
+基准：官方 0.32.1 commit 8571b04 apr 1,2018  
+- 版本号v32.1_M23G3_0402 docker 0402  
 - 修改pid文件名  
 - 随机证书改为2048bit(1024)  
 - client模式时，显示心跳包延迟时间  
@@ -27,6 +27,7 @@
 - ServerConf.Mux.SessionIdleTimeout = 1800 //300  
 - 增加了server.json(docker未使用)，增加了client.json(仅参考)  
 - 同步至官方cee73a4  
+- 同步至官方8571b04  
 
 
 #### Thanks : yinqiwen  
