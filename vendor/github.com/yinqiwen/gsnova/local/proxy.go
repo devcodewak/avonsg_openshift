@@ -167,6 +167,11 @@ func StartProxy() error {
 		<-singalCh
 	}
 
+	err := helper.CreateRootCA(proxyHome + "/MITM")
+	if nil != err {
+		logger.Notice("Create MITM Root CA:%v", err)
+	}
+
 	logger.Info("Started GSnova %s.", channel.Version)
 
 	go startAdminServer()
