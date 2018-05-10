@@ -1,5 +1,5 @@
 # FROM golang:1.9.4-alpine3.6
-FROM golang:1.10.0-alpine3.7 as builder
+FROM golang:1.10.2-alpine3.7 as builder
 
 RUN apk add --update git && \
     go get -d github.com/devcodewak/avonsg_openshift/cmd  && \

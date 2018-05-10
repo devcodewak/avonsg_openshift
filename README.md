@@ -1,13 +1,13 @@
 
 
-### gsnova 0.33 修改版，用于openshift v3 docker部署  
+### gsnova 0.33.1 修改版，用于openshift v3 docker部署  
 
 
 #### 修改项  
 
 目标：规避openshift代理检查等  
-基准：官方 0.33 commit cba06fa apr 7,2018  
-- 版本号v33_M23G_0409 docker 0409  
+基准：官方 0.33.1 commit cba06fa apr 7,2018  
+- 版本号v33_M23G_0511 docker 0511  
 - 修改pid文件名  
 - 随机证书改为2048bit(1024)  
 - client模式时，显示心跳包延迟时间  
@@ -28,7 +28,7 @@
 - 增加了server.json(docker未使用)，增加了client.json(仅参考)  
 - 同步至官方cee73a4  
 - 同步至官方8571b04  
-- 同步至官方cba06fa 0.33阶段版  
+- 同步至官方cba06fa 0.33.1 阶段版  
 
 
 #### Thanks : yinqiwen  
