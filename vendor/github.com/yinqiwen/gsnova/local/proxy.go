@@ -2,7 +2,6 @@ package local
 
 import (
 	"encoding/json"
-	"errors"
 	"io/ioutil"
 	"net/http"
 	"sync/atomic"
@@ -142,6 +141,7 @@ func StartProxy() error {
 	logger.InitLogger(GConf.Log)
 	channel.SetDefaultMuxConfig(GConf.Mux)
 
+	channel.UPNPExposePort = GConf.UPNPExposePort
 	if GConf.TransparentMark > 0 {
 		enableTransparentSocketMark(GConf.TransparentMark)
 	}
@@ -202,11 +202,12 @@ func Start(options ProxyOptions) error {
 			return err
 		}
 	} else {
-		if len(GConf.Proxy) == 0 {
-			return errors.New("Can NOT start proxy without any config")
-		}
+		// if len(GConf.Proxy) == 0 {
+		// 	return errors.New("Can NOT start proxy without any config")
+		// }
 	}
 	GConf.LocalDNS.CNIPSet = options.CNIP
+	channel.SetDefaultProxyLimitConfig(GConf.ProxyLimit)
 	loadHostsConf(hostsConf)
 	return StartProxy()
 }

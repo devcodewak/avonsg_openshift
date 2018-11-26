@@ -5,9 +5,14 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/yinqiwen/gotoolkit/ots"
 	"github.com/yinqiwen/gsnova/common/channel"
@@ -40,6 +45,7 @@ func main() {
 	// if err := agent.Listen(agent.Options{}); err != nil {
 	// 	log.Fatal(err)
 	// }
+
 	path, err := filepath.Abs(os.Args[0])
 	if nil != err {
 		fmt.Println(err)
@@ -47,8 +53,9 @@ func main() {
 	}
 	//common options
 	otsListen := flag.String("ots", "", "Online trouble shooting listen address")
+	pprofAddr := flag.String("pprof", "", "PProf trouble shooting listen address")
 	version := flag.Bool("version", false, "Print version.")
-	cmd := flag.Bool("cmd", false, "Launch gsnova  by command line without config file.")
+	cmd := flag.Bool("cmd", false, "Launch gsnova by command line without config file.")
 	isClient := flag.Bool("client", false, "Launch gsnova as client.")
 	isServer := flag.Bool("server", false, "Launch gsnova as server.")
 	pid := flag.String("pid", ".web.pid", "PID file")
@@ -58,7 +65,12 @@ func main() {
 	window := flag.String("window", "", "Max mux stream window size, default 2048K")
 	windowRefresh := flag.String("window_refresh", "", "Mux stream window refresh size, default 128K")
 	pingInterval := flag.Int("ping_interval", 30, "Channel ping interval seconds.")
+	streamIdle := flag.Int("stream_idle", 10, "Mux stream idle timout seconds.")
 	user := flag.String("user", "gsnova", "Username for remote server to authorize.")
+	var whilteList, blackList channel.HopServers
+	flag.Var(&whilteList, "whitelist", "Proxy whitelist item config")
+	flag.Var(&blackList, "blackList", "Proxy blacklist item config")
+	gcInterval := flag.Int("gc_interval", -1, "Manual GC every interval secs.")
 
 	//client options
 	admin := flag.String("admin", "", "Client Admin listen address")
@@ -67,10 +79,16 @@ func main() {
 	httpDumpDest := flag.String("httpdump.dst", "", "HTTP Dump destination file or http url")
 	var httpDumpFilters channel.HopServers
 	flag.Var(&httpDumpFilters, "httpdump.filter", "HTTP Dump Domain Filter, eg:*.google.com")
-	var hops channel.HopServers
+	var hops, forwards channel.HopServers
 	home, _ := filepath.Split(path)
 	hosts := flag.String("hosts", "./hosts.json", "Hosts file of gsnova client.")
 	flag.Var(&hops, "remote", "Next remote proxy hop server to connect for client, eg:wss://xxx.paas.com")
+	flag.Var(&forwards, "forward", "Forward connection to specified address")
+	p2p := flag.String("p2p", "", "P2P Token.")
+	servable := flag.Bool("servable", false, "Client as a proxy server for peer p2p client")
+	proxy := flag.String("proxy", "", "Proxy setting to connect remote server.")
+	upnpPort := flag.Int("upnp", 0, "UPNP port to expose for p2p.")
+	p2s2p := flag.Bool("p2s2p", false, "Connect two peers by P2S2P mode.")
 
 	//client or server listen
 	var listens channel.HopServers
@@ -83,7 +101,7 @@ func main() {
 	flag.Parse()
 
 	if *version {
-		fmt.Printf("AVonsg version:%s\n", channel.Version)
+		fmt.Printf("Avonsg version:%s\n", channel.Version)
 		return
 	}
 
@@ -108,13 +126,28 @@ func main() {
 			logger.Error("Failed to start admin server with reason:%v", err)
 		}
 	}
+	if len(*pprofAddr) > 0 {
+		go func() {
+			http.ListenAndServe(*pprofAddr, nil)
+		}()
 
+	}
+	if *gcInterval > 0 {
+		go func() {
+			for {
+				runtime.GC()
+				debug.FreeOSMemory()
+				time.Sleep(time.Duration(*gcInterval) * time.Second)
+			}
+		}()
+	}
 	if runAsClient {
 		options := local.ProxyOptions{
 			Home:  home,
 			Hosts: *hosts,
 			CNIP:  *cnip,
 		}
+		local.GConf.UPNPExposePort = *upnpPort
 		if *cmd {
 			if len(hops) == 0 {
 				logger.Error("At least one -hop argument required.", err)
@@ -122,9 +155,11 @@ func main() {
 				return
 			}
 			if len(listens) == 0 {
-				logger.Error("At least one -listen argument required.", err)
-				flag.PrintDefaults()
-				return
+				if len(*p2p) == 0 || !(*servable) {
+					logger.Error("At least one -listen argument required.", err)
+					flag.PrintDefaults()
+					return
+				}
 			}
 			local.GConf.Admin.Listen = *admin
 			channelName := "default"
@@ -133,6 +168,8 @@ func main() {
 			}
 			local.GConf.Mux.MaxStreamWindow = *window
 			local.GConf.Mux.StreamMinRefresh = *windowRefresh
+			local.GConf.Mux.StreamIdleTimeout = *streamIdle
+
 			local.GConf.Cipher.Key = *key
 			local.GConf.Cipher.Method = "auto"
 			local.GConf.Cipher.User = *user
@@ -146,6 +183,11 @@ func main() {
 				proxyConf.PAC = []local.PACConfig{{Remote: channelName}}
 				local.GConf.Proxy = append(local.GConf.Proxy, proxyConf)
 			}
+			for i, forward := range forwards {
+				if len(local.GConf.Proxy) > i {
+					local.GConf.Proxy[i].Forward = forward
+				}
+			}
 
 			if !strings.EqualFold(hops[0], channel.DirectChannelName) {
 				ch := channel.ProxyChannelConfig{}
@@ -155,8 +197,23 @@ func main() {
 				ch.HeartBeatPeriod = *pingInterval
 				ch.ServerList = []string{hops[0]}
 				ch.Hops = hops[1:]
+				ch.P2PToken = *p2p
+				ch.P2S2PEnable = *p2s2p
+
+				ch.Proxy = *proxy
 				local.GConf.Channel = []channel.ProxyChannelConfig{ch}
 			}
+
+			local.GConf.ProxyLimit.WhiteList = whilteList
+			local.GConf.ProxyLimit.BlackList = blackList
+			if len(whilteList) == 0 && len(blackList) == 0 && *servable {
+				local.GConf.ProxyLimit.WhiteList = []string{"*"}
+			}
+			remote.InitDefaultConf()
+			remote.ServerConf.Cipher = local.GConf.Cipher
+			remote.ServerConf.Mux = local.GConf.Mux
+			remote.ServerConf.Cipher.AllowUsers(remote.ServerConf.Cipher.User)
+			channel.DefaultServerCipher = remote.ServerConf.Cipher
 
 			options.WatchConf = false
 			err = local.Start(options)
@@ -253,6 +310,7 @@ func main() {
 			logger.Notice("Server cipher user overide by env:AVONSG_CIPHER_USER")
 		}
 
+		channel.DefaultServerRateLimit = remote.ServerConf.RateLimit
 		remote.ServerConf.Cipher.AllowUsers(remote.ServerConf.Cipher.User)
 		channel.DefaultServerCipher = remote.ServerConf.Cipher
 		channel.SetDefaultMuxConfig(remote.ServerConf.Mux)

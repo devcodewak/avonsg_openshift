@@ -40,14 +40,14 @@ type Config struct {
 // DefaultConfig is used to return a default configuration
 func DefaultConfig() *Config {
 	return &Config{
-		AcceptBacklog:          256,
-		WriteQueueLimit:        1024,
+		AcceptBacklog:          64,
+		WriteQueueLimit:        64,
 		EnableKeepAlive:        true,
 		KeepAliveInterval:      30 * time.Second,
 		ConnectionWriteTimeout: 10 * time.Second,
-		PingTimeout:            5 * time.Second,
+		PingTimeout:            10 * time.Second,
 		MaxStreamWindowSize:    initialStreamWindow,
-		StreamMinRefresh:       uint32(128 << 10), //uint32(32 << 10),
+		StreamMinRefresh:       uint32(128 << 10),
 		EnableCompress:         false,
 		CipherKey:              []byte("1231232134325423534265aadasdasfasfdsdasgdfs"),
 	}

@@ -26,6 +26,29 @@ var proxyServerRunning = true
 var runningProxyStreamCount int64
 var activeStreams sync.Map
 
+var upBytesPool, downBytesPool *sync.Pool
+
+func init() {
+	upBytesPool = &sync.Pool{
+		New: func() interface{} {
+			blen := GConf.Mux.UpBufferSize
+			if 0 == blen {
+				blen = 16 * 1024
+			}
+			return make([]byte, blen)
+		},
+	}
+	downBytesPool = &sync.Pool{
+		New: func() interface{} {
+			blen := GConf.Mux.DownBufferSize
+			if 0 == blen {
+				blen = 64 * 1024
+			}
+			return make([]byte, blen)
+		},
+	}
+}
+
 func isTimeoutErr(err error) bool {
 	if err == pmux.ErrTimeout {
 		return true
@@ -41,6 +64,8 @@ type proxyStreamContext struct {
 	c      io.ReadWriteCloser
 }
 
+var ssidSeed = uint32(0)
+
 func serveProxyConn(conn net.Conn, remoteHost, remotePort string, proxy *ProxyConfig) {
 	var proxyChannelName string
 	protocol := "tcp"
@@ -48,6 +73,11 @@ func serveProxyConn(conn net.Conn, remoteHost, remotePort string, proxy *ProxyCo
 	atomic.AddInt64(&runningProxyStreamCount, 1)
 	defer localConn.Close()
 	defer atomic.AddInt64(&runningProxyStreamCount, -1)
+
+	if len(proxy.Forward) > 0 {
+		logger.Notice("Server:%s forward connection to %s, ", proxy.Local, proxy.Forward)
+		remoteHost, remotePort, _ = net.SplitHostPort(proxy.Forward)
+	}
 
 	isSocksProxy := false
 	isHttpsProxy := false
@@ -70,7 +100,7 @@ func serveProxyConn(conn net.Conn, remoteHost, remotePort string, proxy *ProxyCo
 		mitmEnabled = true
 		return nil
 	}
-
+	//logger.Info("###Enter with %v %v", isTransparentProxy, remoteHost)
 	if !isTransparentProxy {
 		socksConn, sbufconn, err := socks.NewSocksConn(conn)
 		if nil == err {
@@ -151,38 +181,43 @@ func serveProxyConn(conn net.Conn, remoteHost, remotePort string, proxy *ProxyCo
 	//2. sniff domain via http
 	if trySniffDomain {
 		localConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-		headChunk, err := bufconn.Peek(7)
-		if len(headChunk) != 7 {
+		//ss := time.Now()
+		headChunk, err := bufconn.Peek(3)
+		if len(headChunk) != 3 {
 			if err != io.EOF {
 				logger.Error("Peek:%s %d %v to %s:%s", string(headChunk), len(headChunk), err, remoteHost, remotePort)
+			} else {
+				return
 			}
+			//logger.Error("Peek %d %v %v %v", len(headChunk), err, time.Now().Sub(ss), string(headChunk))
 			goto START
 		}
 		method := string(headChunk)
-		if tmp := strings.Fields(method); len(tmp) > 0 {
-			method = tmp[0]
-		}
-		method = strings.ToUpper(method)
+		// if tmp := strings.Fields(method); len(tmp) > 0 {
+		// 	method = tmp[0]
+		// }
+		// method = strings.ToUpper(method)
 		switch method {
 		case "GET":
 			fallthrough
-		case "POST":
+		case "POS":
 			fallthrough
-		case "HEAD":
+		case "HEA":
 			fallthrough
 		case "PUT":
 			fallthrough
-		case "DELETE":
+		case "DEL":
 			fallthrough
-		case "CONNECT":
+		case "CON":
 			fallthrough
-		case "OPTIONS":
+		case "OPT":
 			fallthrough
-		case "TRACE":
+		case "TRAC":
 			fallthrough
-		case "PATCH":
+		case "PAT":
 			isHttp11Proto = true
 		default:
+			logger.Error("Method:%s", method)
 			isHttp11Proto = false
 		}
 		//log.Printf("[%d]]Method:%s", sid, method)
@@ -243,12 +278,25 @@ START:
 	}
 	defer stream.Close()
 
+	var maxIdleTime time.Duration
+	if GConf.Mux.StreamIdleTimeout < 0 {
+		maxIdleTime = 24 * 3600 * time.Second
+	} else {
+		maxIdleTime = time.Duration(GConf.Mux.StreamIdleTimeout) * time.Second
+		if maxIdleTime == 0 {
+			maxIdleTime = 10 * time.Second
+		}
+	}
+
 	ssid := stream.StreamID()
+	if 0 == ssid {
+		ssid = atomic.AddUint32(&ssidSeed, uint32(1))
+	}
 	opt := mux.StreamOptions{
 		DialTimeout: conf.RemoteDialMSTimeout,
 		Hops:        conf.Hops,
+		ReadTimeout: int(maxIdleTime.Seconds()) * 1000,
 	}
-
 	if remotePort == "443" && nil == net.ParseIP(remoteHost) {
 		remoteSNI := conf.GetRemoteSNI(remoteHost)
 		if len(remoteSNI) > 0 {
@@ -303,34 +351,43 @@ START:
 	streamCtx.c = localConn
 	activeStreams.Store(streamCtx, true)
 
-	maxIdleTime := time.Duration(GConf.Mux.StreamIdleTimeout) * time.Second
-	if maxIdleTime == 0 {
-		maxIdleTime = 10 * time.Second
-	}
+	//start := time.Now()
 	closeCh := make(chan int, 1)
 	go func() {
-		buf := make([]byte, 128*1024)
+		//buf := make([]byte, 128*1024)
+		buf := downBytesPool.Get().([]byte)
+		//_, cerr := io.CopyBuffer(localConn, streamReader, buf)
 		io.CopyBuffer(localConn, streamReader, buf)
+		//logger.Notice("Proxy stream[%d] cost %v to copy from  %s:%v %v", ssid, time.Now().Sub(start), remoteHost, remotePort, cerr)
+		localConn.Close()
+		bufconn.Close()
+		downBytesPool.Put(buf)
 		closeCh <- 1
 	}()
 
 	//start task to check stream timeout(if the stream has no read&write action more than 10s)
 
 	if (isSocksProxy || isHttpsProxy || isTransparentProxy) && nil == initialHTTPReq {
-		buf := make([]byte, 128*1024)
+		//buf := make([]byte, 128*1024)
+		buf := upBytesPool.Get().([]byte)
 		for {
 			localConn.SetReadDeadline(time.Now().Add(maxIdleTime))
 			_, cerr := io.CopyBuffer(streamWriter, bufconn, buf)
+			//logger.Notice("Proxy stream[%d] cost %v to copy from local to %s:%v %v", ssid, time.Now().Sub(start), remoteHost, remotePort, cerr)
 			if isTimeoutErr(cerr) && time.Now().Sub(stream.LatestIOTime()) < maxIdleTime {
 				continue
 			}
 			//logger.Error("###%s %v after %v", remoteHost, cerr, time.Now().Sub(stream.LatestIOTime()))
 			break
 		}
-
+		upBytesPool.Put(buf)
 		if close, ok := streamWriter.(io.Closer); ok {
 			close.Close()
+		} else {
+			stream.Close()
 		}
+		localConn.Close()
+		//logger.Notice("Proxy stream[%d] cost %v to copy from local to %s:%v", ssid, time.Now().Sub(start), remoteHost, remotePort)
 	} else {
 		proxyReq := initialHTTPReq
 		initialHTTPReq = nil
@@ -370,6 +427,7 @@ START:
 		}
 	}
 	<-closeCh
+
 	activeStreams.Delete(streamCtx)
 }
 
@@ -399,7 +457,7 @@ func startLocalProxyServer(proxyIdx int) (*net.TCPListener, error) {
 				continue
 			}
 			isTransparent := false
-			if supportTransparentProxy() {
+			if proxyConf.Transparent && supportTransparentProxy() {
 				tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr)
 				if ok {
 					_, exist := helper.GetLocalIPSet()[tcpAddr.IP.String()]
@@ -434,6 +492,7 @@ func startLocalServers() error {
 	for i := range GConf.Proxy {
 		startLocalProxyServer(i)
 	}
+
 	return nil
 }
 
@@ -451,6 +510,8 @@ func stopLocalServers() {
 		if nil != ctx.c {
 			ctx.c.Close()
 		}
+		activeStreams.Delete(key)
 		return true
 	})
+
 }

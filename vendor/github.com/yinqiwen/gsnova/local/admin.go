@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+
+	//"log"
 	"net"
 	"net/http"
 
-	"github.com/yinqiwen/gsnova/common/logger"
 	//_ "net/http/pprof"
 	"os"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/yinqiwen/gotoolkit/ots"
 	"github.com/yinqiwen/gsnova/common/channel"
 	"github.com/yinqiwen/gsnova/common/helper"
+	"github.com/yinqiwen/gsnova/common/logger"
 	"github.com/yinqiwen/gsnova/common/netx"
 )
 
@@ -85,7 +87,7 @@ func startAdminServer() {
 					c, err = net.DialUDP("udp", nil, addr)
 				}
 				if err != nil {
-					logger.Printf("Failed to resolve multicast addr.")
+					logger.Printf("[Error]Failed to resolve multicast addr.")
 				} else {
 					for _, ip := range localIP {
 						c.Write([]byte(net.JoinHostPort(ip, adminPort)))
@@ -112,7 +114,7 @@ func startAdminServer() {
 	mux.HandleFunc("/httpdump", httpDumpCallback)
 	err := http.ListenAndServe(GConf.Admin.Listen, mux)
 	if nil != err {
-		logger.Printf("[ERROR]Failed to start config store server:%v", err)
+		logger.Printf("[Error]Failed to start config store server:%v", err)
 	}
 }
 

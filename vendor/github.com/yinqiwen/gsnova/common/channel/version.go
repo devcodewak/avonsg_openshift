@@ -1,3 +1,3 @@
 package channel
 
-const Version = "v33_M23G_0511"
+const Version = "v34_M24G_1126"

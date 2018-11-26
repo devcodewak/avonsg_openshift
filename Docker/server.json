@@ -9,11 +9,16 @@
 		//AllowedUser
 		"User": "*,gsnova"
 	},
+    //Limit user 'abc' bandwidth to 256KB/s
+	"RateLimit":{
+		"abc": "256K",
+		"*":"-1"
+	},
 	"Mux":{
-		"MaxStreamWindow": "2048K",
-		"StreamMinRefresh":"128K",
-		"StreamIdleTimeout":90,
-		"SessionIdleTimeout":1800
+		"MaxStreamWindow": "512K",
+		"StreamMinRefresh":"32K",
+		"StreamIdleTimeout":10,
+		"SessionIdleTimeout":300
 	},
 	"Server":[
 		{
@@ -39,7 +44,7 @@
 	        //"Cert":"/etc/letsencrypt/live/testdomain.tk/fullchain.pem"
 		},
 		{
-			"Listen":"http2//:48103",
+			"Listen":"http2://:48103",
 			"Key": "",
 			"Cert":""
 		}

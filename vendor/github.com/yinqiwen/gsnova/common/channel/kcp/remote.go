@@ -36,6 +36,7 @@ func servKCP(lp *kcp.Listener, config *channel.KCPConfig) {
 		if nil != err {
 			continue
 		}
+
 		//config := &remote.ServerConf.KCP
 		conn.SetStreamMode(true)
 		conn.SetWriteDelay(true)
@@ -49,7 +50,7 @@ func servKCP(lp *kcp.Listener, config *channel.KCPConfig) {
 			continue
 		}
 		muxSession := &mux.ProxyMuxSession{Session: session}
-		go channel.ServProxyMuxSession(muxSession)
+		go channel.ServProxyMuxSession(muxSession, nil, nil)
 	}
 	//ws.WriteMessage(websocket.CloseMessage, []byte{})
 }

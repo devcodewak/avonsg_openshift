@@ -18,26 +18,18 @@ const (
 
 // The version numbers, making grepping easier
 const (
-	Version39       VersionNumber = gquicVersion0 + 3*0x100 + 0x9 + iota
 	VersionTLS      VersionNumber = 101
-	VersionWhatever VersionNumber = 0 // for when the version doesn't matter
+	VersionWhatever VersionNumber = 1 // for when the version doesn't matter
 	VersionUnknown  VersionNumber = math.MaxUint32
 )
 
 // SupportedVersions lists the versions that the server supports
 // must be in sorted descending order
-var SupportedVersions = []VersionNumber{
-	Version39,
-}
+var SupportedVersions = []VersionNumber{VersionTLS}
 
 // IsValidVersion says if the version is known to quic-go
 func IsValidVersion(v VersionNumber) bool {
 	return v == VersionTLS || IsSupportedVersion(SupportedVersions, v)
-}
-
-// UsesTLS says if this QUIC version uses TLS 1.3 for the handshake
-func (vn VersionNumber) UsesTLS() bool {
-	return vn == VersionTLS
 }
 
 func (vn VersionNumber) String() string {
@@ -58,39 +50,7 @@ func (vn VersionNumber) String() string {
 
 // ToAltSvc returns the representation of the version for the H2 Alt-Svc parameters
 func (vn VersionNumber) ToAltSvc() string {
-	if vn.isGQUIC() {
-		return fmt.Sprintf("%d", vn.toGQUICVersion())
-	}
 	return fmt.Sprintf("%d", vn)
-}
-
-// CryptoStreamID gets the Stream ID of the crypto stream
-func (vn VersionNumber) CryptoStreamID() StreamID {
-	if vn.isGQUIC() {
-		return 1
-	}
-	return 0
-}
-
-// UsesIETFFrameFormat tells if this version uses the IETF frame format
-func (vn VersionNumber) UsesIETFFrameFormat() bool {
-	return vn != Version39
-}
-
-// UsesStopWaitingFrames tells if this version uses STOP_WAITING frames
-func (vn VersionNumber) UsesStopWaitingFrames() bool {
-	return vn == Version39
-}
-
-// StreamContributesToConnectionFlowControl says if a stream contributes to connection-level flow control
-func (vn VersionNumber) StreamContributesToConnectionFlowControl(id StreamID) bool {
-	if id == vn.CryptoStreamID() {
-		return false
-	}
-	if vn.isGQUIC() && id == 3 {
-		return false
-	}
-	return true
 }
 
 func (vn VersionNumber) isGQUIC() bool {
@@ -143,4 +103,15 @@ func GetGreasedVersions(supported []VersionNumber) []VersionNumber {
 	greased[randPos] = generateReservedVersion()
 	copy(greased[randPos+1:], supported[randPos:])
 	return greased
+}
+
+// StripGreasedVersions strips all greased versions from a slice of versions
+func StripGreasedVersions(versions []VersionNumber) []VersionNumber {
+	realVersions := make([]VersionNumber, 0, len(versions))
+	for _, v := range versions {
+		if v&0x0f0f0f0f != 0x0a0a0a0a {
+			realVersions = append(realVersions, v)
+		}
+	}
+	return realVersions
 }

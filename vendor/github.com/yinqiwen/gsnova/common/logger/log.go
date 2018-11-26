@@ -3,6 +3,7 @@ package logger
 import (
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"strings"
@@ -98,6 +99,8 @@ func InitLogger(output []string) {
 	}
 	if len(ws) > 0 {
 		log.SetOutput(io.MultiWriter(ws...))
+	} else {
+		log.SetOutput(ioutil.Discard)
 	}
 }
 

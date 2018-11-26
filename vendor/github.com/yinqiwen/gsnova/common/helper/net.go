@@ -3,6 +3,7 @@ package helper
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/yinqiwen/gsnova/common/logger"
 	"github.com/yinqiwen/gsnova/common/netx"
+	"github.com/yinqiwen/gsnova/common/protector"
 )
 
 var ErrWriteTimeout = errors.New("write timeout")
@@ -256,12 +258,24 @@ func HTTPProxyConnect(proxyURL *url.URL, c net.Conn, addr string) error {
 	return nil
 }
 
-func ProxyDial(proxyURL string, addr string, timeout time.Duration) (net.Conn, error) {
+func ProxyDial(proxyURL string, laddr, raddr string, timeout time.Duration, reuse bool) (net.Conn, error) {
 	u, err := url.Parse(proxyURL)
 	if nil != err {
 		return nil, err
 	}
-	c, err := netx.DialTimeout("tcp", u.Host, timeout)
+	var c net.Conn
+	if len(laddr) > 0 || reuse {
+		opt := &protector.NetOptions{
+			ReusePort:   reuse,
+			LocalAddr:   laddr,
+			DialTimeout: timeout,
+		}
+		c, err = protector.DialContextOptions(context.Background(), "tcp", u.Host, opt)
+		//logger.Info("#####C %v with err:%v", u.Host, err)
+	} else {
+		c, err = netx.DialTimeout("tcp", u.Host, timeout)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -269,10 +283,19 @@ func ProxyDial(proxyURL string, addr string, timeout time.Duration) (net.Conn, e
 	case "http":
 		fallthrough
 	case "https":
-		err = HTTPProxyConnect(u, c, addr)
+		if timeout > 0 {
+			c.SetReadDeadline(time.Now().Add(timeout))
+		}
+		err = HTTPProxyConnect(u, c, raddr)
+		if nil == err {
+			if timeout > 0 {
+				var zero time.Time
+				c.SetReadDeadline(zero)
+			}
+		}
 	case "socks":
 	case "socks5":
-		err = Socks5ProxyConnect(u, c, addr)
+		err = Socks5ProxyConnect(u, c, raddr)
 	default:
 		return nil, fmt.Errorf("invalid proxy schema:%s", u.Scheme)
 	}
@@ -496,7 +519,7 @@ func GetLocalIPSet() map[string]bool {
 
 // Setup a bare-bones TLS config for the server
 func GenerateTLSConfig() *tls.Config {
-	key, err := rsa.GenerateKey(rand.Reader, 2048) //1024)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		panic(err)
 	}
@@ -513,4 +536,12 @@ func GenerateTLSConfig() *tls.Config {
 		panic(err)
 	}
 	return &tls.Config{Certificates: []tls.Certificate{tlsCert}}
+}
+
+func IsConnClosed(c net.Conn) error {
+	zero := []byte{}
+	if _, err := c.Read(zero); nil != err {
+		return err
+	}
+	return nil
 }

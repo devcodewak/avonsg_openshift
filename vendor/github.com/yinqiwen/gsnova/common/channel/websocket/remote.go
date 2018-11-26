@@ -23,6 +23,7 @@ func WebsocketInvoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	//logger.Info("req headers: %v", r.Header, r.R)
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		//log.WithField("err", err).Println("Upgrading to websockets")
@@ -34,6 +35,6 @@ func WebsocketInvoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	muxSession := &mux.ProxyMuxSession{Session: session}
-	channel.ServProxyMuxSession(muxSession)
+	channel.ServProxyMuxSession(muxSession, nil, nil)
 	//ws.WriteMessage(websocket.CloseMessage, []byte{})
 }

@@ -4,14 +4,13 @@ import (
 	"bufio"
 	"encoding/base64"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
-
-	"github.com/yinqiwen/gsnova/common/logger"
 
 	"golang.org/x/net/publicsuffix"
 )
@@ -60,7 +59,7 @@ func (r *urlWildcardRule) init() {
 		}
 		reg, err := regexp.Compile(pattern)
 		if nil != err {
-			logger.Printf("Invalid regexp rule:%s with reason:%v", pattern, err)
+			log.Printf("Invalid regexp rule:%s with reason:%v", pattern, err)
 		}
 		r.regex = reg
 	}
@@ -92,7 +91,7 @@ func (r *regexRule) match(u *url.URL) bool {
 	// }
 	matched, err := regexp.MatchString(r.pattern, u.String())
 	if nil != err {
-		logger.Printf("Invalid regex pattern:%s wiuth reason:%v", r.pattern, err)
+		log.Printf("Invalid regex pattern:%s wiuth reason:%v", r.pattern, err)
 	}
 	return matched
 }
@@ -145,7 +144,7 @@ func (gfw *GFWList) parse(line string) error {
 				str = str[0 : len(str)-1]
 			}
 			if strings.Contains(str, "/") {
-				logger.Printf("Unsupported rule:%s", line)
+				log.Printf("Unsupported rule:%s", line)
 				return nil
 			}
 			rule = &hostRule{str}
@@ -188,7 +187,7 @@ func (gfw *GFWList) parse(line string) error {
 			dr.rule = rule
 			dr.domain.pattern = matchHost
 			gfw.domainPattenRules = append(gfw.domainPattenRules, dr)
-			//logger.Printf("###%s %s", str, matchHost)
+			//log.Printf("###%s %s", str, matchHost)
 		} else {
 			if matchHost[0] == '.' {
 				matchHost = matchHost[1:]
@@ -198,7 +197,7 @@ func (gfw *GFWList) parse(line string) error {
 			gfw.fastMatchMap[matchHost] = rs
 		}
 	} else {
-		//logger.Printf("###%s", str)
+		//log.Printf("###%s", str)
 		gfw.ruleList = append(gfw.ruleList, rule)
 	}
 	return nil
@@ -223,7 +222,7 @@ func (gfw *GFWList) loadContent(body []byte, base64Encoding bool) error {
 		str := strings.TrimSpace(string(line))
 		gfw.parse(str)
 	}
-	//logger.Printf("####%d %d", len(gfw.fastMatchMap), len(gfw.ruleList))
+	//log.Printf("####%d %d", len(gfw.fastMatchMap), len(gfw.ruleList))
 	return nil
 }
 
@@ -275,7 +274,7 @@ func (gfw *GFWList) IsDomainBlocked(domain string) bool {
 				allWhilteList = false
 			}
 		}
-		//logger.Printf("### %s ==== %v", domain, allWhilteList)
+		//log.Printf("### %s ==== %v", domain, allWhilteList)
 		if allWhilteList {
 			return false
 		}

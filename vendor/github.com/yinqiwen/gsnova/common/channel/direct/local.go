@@ -25,8 +25,21 @@ type directStream struct {
 	latestIOTime time.Time
 }
 
-func (tc *directStream) Auth(req *mux.AuthRequest) error {
-	return nil
+func (tc *directStream) SetReadDeadline(t time.Time) error {
+	if nil == tc.Conn {
+		return io.EOF
+	}
+	return tc.Conn.SetReadDeadline(t)
+}
+func (tc *directStream) SetWriteDeadline(t time.Time) error {
+	if nil == tc.Conn {
+		return io.EOF
+	}
+	return tc.Conn.SetWriteDeadline(t)
+}
+
+func (tc *directStream) Auth(req *mux.AuthRequest) *mux.AuthResponse {
+	return &mux.AuthResponse{Code: mux.AuthOK}
 }
 
 func (tc *directStream) Connect(network string, addr string, opt mux.StreamOptions) error {
@@ -135,6 +148,13 @@ type directMuxSession struct {
 	proxyServer  string
 }
 
+func (s *directMuxSession) RemoteAddr() net.Addr {
+	return nil
+}
+func (s *directMuxSession) LocalAddr() net.Addr {
+	return nil
+}
+
 func (tc *directMuxSession) closeStream(s *directStream) {
 	tc.streamsMutex.Lock()
 	defer tc.streamsMutex.Unlock()
@@ -157,7 +177,7 @@ func (tc *directMuxSession) OpenStream() (mux.MuxStream, error) {
 	return stream, nil
 }
 func (tc *directMuxSession) AcceptStream() (mux.MuxStream, error) {
-	return nil, nil
+	return nil, channel.ErrNotSupportedOperation
 }
 
 func (tc *directMuxSession) NumStreams() int {

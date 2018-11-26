@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/ioutil"
 	"math/rand"
+	"net"
 	"sync/atomic"
 	"time"
 
@@ -37,9 +38,24 @@ type AuthRequest struct {
 	CipherCounter  uint64
 	CipherMethod   string
 	CompressMethod string
+
+	P2PToken   string
+	P2PConnID  string
+	P2PPriAddr string
+	P2PPubAddr string
 }
 type AuthResponse struct {
-	Code int
+	Code        int
+	PeerPriAddr string
+	PeerPubAddr string
+	PubAddr     string
+}
+
+func (res *AuthResponse) Error() error {
+	if AuthOK == res.Code {
+		return nil
+	}
+	return ErrAuthFailed
 }
 
 func ReadConnectRequest(stream io.Reader) (*ConnectRequest, error) {
@@ -95,10 +111,14 @@ type StreamOptions struct {
 	Hops        []string
 }
 
+type SyncCloser interface {
+	SyncClose() error
+}
+
 type MuxStream interface {
 	io.ReadWriteCloser
 	Connect(network string, addr string, opt StreamOptions) error
-	Auth(req *AuthRequest) error
+	Auth(req *AuthRequest) *AuthResponse
 	StreamID() uint32
 	SetReadDeadline(t time.Time) error
 	SetWriteDeadline(t time.Time) error
@@ -112,6 +132,8 @@ type MuxSession interface {
 	Ping() (time.Duration, error)
 	NumStreams() int
 	Close() error
+	RemoteAddr() net.Addr
+	LocalAddr() net.Addr
 }
 
 type ProxyMuxStream struct {
@@ -124,6 +146,27 @@ type ProxyMuxStream struct {
 func (s *ProxyMuxStream) OnIO(read bool) {
 	s.latestIOTime = time.Now()
 }
+func (s *ProxyMuxStream) ReadFrom(r io.Reader) (n int64, err error) {
+	if readFrom, ok := s.TimeoutReadWriteCloser.(io.ReaderFrom); ok {
+		return readFrom.ReadFrom(r)
+	}
+	var nn int
+	buf := make([]byte, 8192)
+	for {
+		nn, err = r.Read(buf)
+		if nn > 0 {
+			n += int64(nn)
+			_, werr := s.Write(buf[0:nn])
+			if nil != werr {
+				return n, werr
+			}
+		}
+		if nil != err {
+			return n, err
+		}
+	}
+}
+
 func (s *ProxyMuxStream) WriteTo(w io.Writer) (n int64, err error) {
 	if writerTo, ok := s.TimeoutReadWriteCloser.(io.WriterTo); ok {
 		return writerTo.WriteTo(w)
@@ -143,7 +186,6 @@ func (s *ProxyMuxStream) WriteTo(w io.Writer) (n int64, err error) {
 			return n, err
 		}
 	}
-	return
 }
 
 func (s *ProxyMuxStream) Read(p []byte) (int, error) {
@@ -187,31 +229,34 @@ func (s *ProxyMuxStream) Connect(network string, addr string, opt StreamOptions)
 	}
 	return WriteMessage(s, req)
 }
-func (s *ProxyMuxStream) Auth(req *AuthRequest) error {
+func (s *ProxyMuxStream) Auth(req *AuthRequest) *AuthResponse {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	req.Rand = helper.RandAsciiString(int(r.Int31n(128)))
 	err := WriteMessage(s, req)
+	res := &AuthResponse{Code: -1}
 	if nil != err {
-		return err
+		return res
 	}
-	res := &AuthResponse{}
+
 	err = ReadMessage(s, res)
 	if nil != err {
-		return err
+		return res
 	}
 	if nil == err {
 		//wait remote close
 		ioutil.ReadAll(s)
 	}
-	//s.Read(make([]byte, 1))
-	if res.Code != AuthOK {
-		return ErrAuthFailed
-	}
-	return nil
+	return res
+}
+
+type ConnAddr interface {
+	LocalAddr() net.Addr
+	RemoteAddr() net.Addr
 }
 
 type ProxyMuxSession struct {
 	*pmux.Session
+	NetConn ConnAddr
 }
 
 func (s *ProxyMuxSession) CloseStream(stream MuxStream) error {
@@ -236,6 +281,19 @@ func (s *ProxyMuxSession) AcceptStream() (MuxStream, error) {
 	stream := &ProxyMuxStream{TimeoutReadWriteCloser: ss}
 	ss.IOCallback = stream
 	return stream, nil
+}
+
+func (s *ProxyMuxSession) RemoteAddr() net.Addr {
+	if nil != s.NetConn {
+		return s.NetConn.RemoteAddr()
+	}
+	return nil
+}
+func (s *ProxyMuxSession) LocalAddr() net.Addr {
+	if nil != s.NetConn {
+		return s.NetConn.LocalAddr()
+	}
+	return nil
 }
 
 func init() {

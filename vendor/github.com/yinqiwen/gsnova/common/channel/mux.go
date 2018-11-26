@@ -3,7 +3,7 @@ package channel
 import (
 	"fmt"
 	"io"
-	"math"
+	"net"
 	"net/url"
 	"reflect"
 	"strings"
@@ -16,6 +16,12 @@ import (
 	"github.com/yinqiwen/gsnova/common/mux"
 	"github.com/yinqiwen/pmux"
 )
+
+var p2pConnID string
+
+func init() {
+	p2pConnID = helper.RandAsciiString(32)
+}
 
 type DeadLineAccetor interface {
 	SetReadDeadline(t time.Time) error
@@ -105,10 +111,10 @@ func (s *muxSessionHolder) heartbeat(interval int) {
 						logger.Error("[ERR]: Ping remote:%s failed: %v", s.server, err)
 						s.close()
 					} else {
+						logger.Debug("Heatbeat %v %s", duration, s.server)
 						// if duration > time.Duration(100)*time.Millisecond {
 						// 	logger.Debug("Cost %v to ping remote:%s", duration, s.server)
 						// }
-						logger.Debug("Heatbeat %v %s", duration, s.server)
 					}
 				}
 			} else {
@@ -130,33 +136,16 @@ func (s *muxSessionHolder) init(lock bool) error {
 	}
 	session, err := s.Channel.CreateMuxSession(s.server, s.conf)
 	if nil == err && nil != session {
-		authStream, err := session.OpenStream()
-		if nil != err {
-			return err
-		}
-		counter := uint64(helper.RandBetween(0, math.MaxInt32))
 		cipherMethod := s.conf.Cipher.Method
 		if strings.HasPrefix(s.server, "https://") || strings.HasPrefix(s.server, "wss://") || strings.HasPrefix(s.server, "tls://") || strings.HasPrefix(s.server, "quic://") || strings.HasPrefix(s.server, "http2://") {
 			cipherMethod = "none"
 		}
-		authReq := &mux.AuthRequest{
-			User:           s.conf.Cipher.User,
-			CipherCounter:  counter,
-			CipherMethod:   cipherMethod,
-			CompressMethod: s.conf.Compressor,
-		}
-		err = authStream.Auth(authReq)
-		authStream.Close()
+		err, authReq, _ := clientAuthMuxSession(session, cipherMethod, s.conf, "", "", true, false)
 		if nil != err {
+
 			return err
 		}
-		if psession, ok := session.(*mux.ProxyMuxSession); ok {
-			err = psession.Session.ResetCryptoContext(cipherMethod, counter)
-			if nil != err {
-				logger.Error("[ERROR]Failed to reset cipher context with reason:%v, while cipher method:%s", err, cipherMethod)
-				return err
-			}
-		}
+
 		s.creatTime = time.Now()
 		s.muxSession = session
 		features := s.Channel.Features()
@@ -168,9 +157,16 @@ func (s *muxSessionHolder) init(lock bool) error {
 			logger.Debug("Mux session woulde expired after %d seconds.", expireAfter)
 			s.expireTime = time.Now().Add(time.Duration(expireAfter) * time.Second)
 		}
+
 		if features.Pingable && s.conf.HeartBeatPeriod > 0 {
 			go s.heartbeat(s.conf.HeartBeatPeriod)
 		}
+		if DirectChannelName != s.conf.Name {
+			if len(defaultProxyLimitConfig.BlackList) > 0 || len(defaultProxyLimitConfig.WhiteList) > 0 {
+				go ServProxyMuxSession(session, authReq, nil)
+			}
+		}
+
 		return nil
 	}
 	if nil == err {
@@ -183,10 +179,53 @@ var localChannelTable = make(map[string]*LocalProxyChannel)
 var localChannelMutex sync.Mutex
 
 type LocalProxyChannel struct {
-	Conf           ProxyChannelConfig
-	sessions       map[*muxSessionHolder]bool
+	Conf ProxyChannelConfig
+	//sessions       map[*muxSessionHolder]bool
+	sessions       []*muxSessionHolder
+	cursor         int32
 	lastActiveTime time.Time
 	autoExpire     bool
+	p2pSessions    sync.Map
+}
+
+func (ch *LocalProxyChannel) isP2PSessionEstablisehd() bool {
+	empty := true
+	ch.p2pSessions.Range(func(key, value interface{}) bool {
+		empty = false
+		return false
+	})
+	return !empty
+}
+
+func (ch *LocalProxyChannel) closeAll() {
+	for _, holder := range ch.sessions {
+		if nil != holder {
+			holder.close()
+		}
+	}
+}
+
+func (ch *LocalProxyChannel) setP2PSession(c net.Conn, s mux.MuxSession, authReq *mux.AuthRequest) {
+	ch.p2pSessions.Store(s, true)
+	if nil != s {
+		go func() {
+			failCount := 0
+			for failCount < 3 {
+				time.Sleep(3 * time.Second)
+				if duration, err := s.Ping(); nil != err {
+					logger.Error("P2P Tunnl Ping error:%v after %v", err, duration)
+					failCount++
+					time.Sleep(3 * time.Second)
+					continue
+				}
+				failCount = 0
+			}
+			ch.p2pSessions.Delete(s)
+		}()
+		if len(defaultProxyLimitConfig.BlackList) > 0 || len(defaultProxyLimitConfig.WhiteList) > 0 {
+			go ServProxyMuxSession(s, authReq, nil)
+		}
+	}
 }
 
 func (ch *LocalProxyChannel) createMuxSessionByProxy(p LocalChannel, server string, init bool) (*muxSessionHolder, error) {
@@ -202,24 +241,44 @@ func (ch *LocalProxyChannel) createMuxSessionByProxy(p LocalChannel, server stri
 	}
 
 	if nil == err {
-		ch.sessions[holder] = true
+		ch.sessions = append(ch.sessions, holder)
+		//ch.sessions[holder] = true
 		return holder, nil
 	}
 	return nil, err
 }
 
 func (ch *LocalProxyChannel) getMuxStream() (stream mux.MuxStream, err error) {
-	for holder := range ch.sessions {
+	ch.p2pSessions.Range(func(key, value interface{}) bool {
+		session := key.(mux.MuxSession)
+		stream, err = session.OpenStream()
+		if nil == err {
+			return false
+		}
+		return true
+	})
+	if nil != stream {
+		return
+	}
+
+	c := atomic.LoadInt32(&ch.cursor)
+	for i := 0; i < len(ch.sessions); i++ {
+		if int(c) >= len(ch.sessions) {
+			c = 0
+		}
+		holder := ch.sessions[c]
 		stream, err = holder.getNewStream()
 		if nil != err {
 			if err == pmux.ErrSessionShutdown {
 				holder.close()
 			}
 			logger.Debug("Try to get next session since current session failed to open new stream with err:%v", err)
+			c++
 		} else {
 			if ch.autoExpire {
 				ch.lastActiveTime = time.Now()
 			}
+			atomic.StoreInt32(&ch.cursor, c+1)
 			return
 		}
 	}
@@ -238,6 +297,7 @@ func (ch *LocalProxyChannel) Init(lock bool) bool {
 			logger.Error("Invalid server url:%s with reason:%v", server, err)
 			continue
 		}
+
 		schema := strings.ToLower(u.Scheme)
 		if t, ok := LocalChannelTypeTable[schema]; !ok {
 			logger.Error("[ERROR]No registe proxy for schema:%s", schema)
@@ -245,13 +305,36 @@ func (ch *LocalProxyChannel) Init(lock bool) bool {
 		} else {
 			v := reflect.New(t)
 			p := v.Interface().(LocalChannel)
+			shouldInit := false
+			if ch.Conf.P2S2PEnable && len(conf.P2PToken) > 0 {
+				ch.Conf.lazyConnect = false
+				shouldInit = true
+				if ch.Conf.HeartBeatPeriod <= 0 || ch.Conf.HeartBeatPeriod >= 10 {
+					ch.Conf.HeartBeatPeriod = 3
+				}
+			}
 			for i := 0; i < conf.ConnsPerServer; i++ {
-				_, err := ch.createMuxSessionByProxy(p, server, i == 0)
+				if 0 == i {
+					shouldInit = true
+				}
+				holder, err := ch.createMuxSessionByProxy(p, server, shouldInit)
 				if nil != err {
 					logger.Error("[ERROR]Failed to create mux session for %s:%d with reason:%v", server, i, err)
 					break
 				} else {
 					success = true
+					if len(conf.P2PToken) > 0 {
+						if !conf.P2S2PEnable {
+							holder.close()
+						}
+					}
+				}
+			}
+			if success {
+				if len(conf.P2PToken) > 0 {
+					if !conf.P2S2PEnable {
+						go startP2PSession(server, p, ch)
+					}
 				}
 			}
 		}
@@ -274,7 +357,7 @@ func (ch *LocalProxyChannel) Init(lock bool) bool {
 func DumpLoaclChannelStat(w io.Writer) {
 	for _, pch := range localChannelTable {
 		if pch.Conf.Name != DirectChannelName {
-			for holder := range pch.sessions {
+			for _, holder := range pch.sessions {
 				if nil != holder {
 					holder.dumpStat(w)
 				}
@@ -285,8 +368,8 @@ func DumpLoaclChannelStat(w io.Writer) {
 
 func NewProxyChannel(conf *ProxyChannelConfig) *LocalProxyChannel {
 	channel := &LocalProxyChannel{
-		Conf:     *conf,
-		sessions: make(map[*muxSessionHolder]bool),
+		Conf: *conf,
+		//sessions: make(map[*muxSessionHolder]bool),
 	}
 	return channel
 }
@@ -344,7 +427,7 @@ func GetMuxStreamByURL(u *url.URL, defaultUser string, defaultCipher *CipherConf
 
 func StopLocalChannels() {
 	for _, pch := range localChannelTable {
-		for holder := range pch.sessions {
+		for _, holder := range pch.sessions {
 			if nil != holder && nil != holder.muxSession {
 				holder.muxSession.Close()
 			}
@@ -369,7 +452,7 @@ func expireLocalChannels() {
 				continue
 			}
 			expire := true
-			for session := range ch.sessions {
+			for _, session := range ch.sessions {
 				session.check()
 				session.tryCloseRetiredSessions()
 				if len(session.retiredSessions) > 0 {

@@ -10,6 +10,9 @@ type sentPacketHistory struct {
 	packetList *PacketList
 	packetMap  map[protocol.PacketNumber]*PacketElement
 
+	numOutstandingPackets          int
+	numOutstandingHandshakePackets int
+
 	firstOutstanding *PacketElement
 }
 
@@ -29,6 +32,12 @@ func (h *sentPacketHistory) sentPacketImpl(p *Packet) *PacketElement {
 	h.packetMap[p.PacketNumber] = el
 	if h.firstOutstanding == nil {
 		h.firstOutstanding = el
+	}
+	if p.canBeRetransmitted {
+		h.numOutstandingPackets++
+		if p.EncryptionLevel != protocol.Encryption1RTT {
+			h.numOutstandingHandshakePackets++
+		}
 	}
 	return el
 }
@@ -87,26 +96,35 @@ func (h *sentPacketHistory) FirstOutstanding() *Packet {
 
 // QueuePacketForRetransmission marks a packet for retransmission.
 // A packet can only be queued once.
-func (h *sentPacketHistory) QueuePacketForRetransmission(pn protocol.PacketNumber) (*Packet, error) {
+func (h *sentPacketHistory) MarkCannotBeRetransmitted(pn protocol.PacketNumber) error {
 	el, ok := h.packetMap[pn]
 	if !ok {
-		return nil, fmt.Errorf("sent packet history: packet %d not found", pn)
+		return fmt.Errorf("sent packet history: packet %d not found", pn)
 	}
-	if el.Value.queuedForRetransmission {
-		return nil, fmt.Errorf("sent packet history BUG: packet %d already queued for retransmission", pn)
+	if el.Value.canBeRetransmitted {
+		h.numOutstandingPackets--
+		if h.numOutstandingPackets < 0 {
+			panic("numOutstandingHandshakePackets negative")
+		}
+		if el.Value.EncryptionLevel != protocol.Encryption1RTT {
+			h.numOutstandingHandshakePackets--
+			if h.numOutstandingHandshakePackets < 0 {
+				panic("numOutstandingHandshakePackets negative")
+			}
+		}
 	}
-	el.Value.queuedForRetransmission = true
+	el.Value.canBeRetransmitted = false
 	if el == h.firstOutstanding {
 		h.readjustFirstOutstanding()
 	}
-	return &el.Value, nil
+	return nil
 }
 
 // readjustFirstOutstanding readjusts the pointer to the first outstanding packet.
 // This is necessary every time the first outstanding packet is deleted or retransmitted.
 func (h *sentPacketHistory) readjustFirstOutstanding() {
 	el := h.firstOutstanding.Next()
-	for el != nil && el.Value.queuedForRetransmission {
+	for el != nil && !el.Value.canBeRetransmitted {
 		el = el.Next()
 	}
 	h.firstOutstanding = el
@@ -124,7 +142,27 @@ func (h *sentPacketHistory) Remove(p protocol.PacketNumber) error {
 	if el == h.firstOutstanding {
 		h.readjustFirstOutstanding()
 	}
+	if el.Value.canBeRetransmitted {
+		h.numOutstandingPackets--
+		if h.numOutstandingPackets < 0 {
+			panic("numOutstandingHandshakePackets negative")
+		}
+		if el.Value.EncryptionLevel != protocol.Encryption1RTT {
+			h.numOutstandingHandshakePackets--
+			if h.numOutstandingHandshakePackets < 0 {
+				panic("numOutstandingHandshakePackets negative")
+			}
+		}
+	}
 	h.packetList.Remove(el)
 	delete(h.packetMap, p)
 	return nil
+}
+
+func (h *sentPacketHistory) HasOutstandingPackets() bool {
+	return h.numOutstandingPackets > 0
+}
+
+func (h *sentPacketHistory) HasOutstandingHandshakePackets() bool {
+	return h.numOutstandingHandshakePackets > 0
 }

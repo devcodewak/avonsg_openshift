@@ -3,20 +3,21 @@ package pmux
 import (
 	"bufio"
 	"encoding/binary"
+	"fmt"
 	"io"
+	"log"
 	"math"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/yinqiwen/gsnova/common/logger"
 )
 
 // sendReady is used to either mark a stream as ready
 // or to directly send a header
 type sendReady struct {
-	F   Frame
+	F   LenFrame
 	Err chan error
 }
 
@@ -36,27 +37,35 @@ type Session struct {
 	sendCh         chan sendReady
 	pingCh         chan struct{}
 
-	shutdown     bool
+	shutdown     int32
 	shutdownErr  error
 	shutdownCh   chan struct{}
 	shutdownLock sync.Mutex
 	initCh       chan struct{}
 
 	handshakeDone bool
+	acceptable    bool
 
 	cryptoContext *CryptoContext
 	lastRecvTime  time.Time
+	sendingNum    int32
+
+	lenbuf [4]byte
+}
+
+func (s *Session) IsShutdown() bool {
+	return atomic.LoadInt32(&s.shutdown) > 0
 }
 
 // keepalive is a long running goroutine that periodically does
 // a ping to keep the connection alive.
 func (s *Session) keepalive() {
-	for !s.shutdown {
+	for !s.IsShutdown() {
 		select {
 		case <-time.After(s.config.KeepAliveInterval):
 			_, err := s.Ping()
 			if err != nil {
-				logger.Printf("[ERR] pmux: keepalive failed: %v", err)
+				log.Printf("[ERR] pmux: keepalive failed: %v", err)
 				if err == ErrTimeout {
 					s.Close()
 					return
@@ -71,7 +80,8 @@ func (s *Session) keepalive() {
 // Ping is used to measure the RTT response time
 func (s *Session) Ping() (time.Duration, error) {
 	// Send the ping request
-	err := s.writeFrameNowait(newFrame(flagPing, 0, 0, nil))
+	pingTimeout := time.After(s.config.PingTimeout)
+	err := s.writeFrameNowait(newLenFrame(flagPing, 0, 0, nil), pingTimeout)
 	if nil != err {
 		return 0, err
 	}
@@ -80,7 +90,7 @@ func (s *Session) Ping() (time.Duration, error) {
 	start := time.Now()
 	select {
 	case <-s.pingCh:
-	case <-time.After(s.config.PingTimeout):
+	case <-pingTimeout:
 		if time.Now().Sub(s.lastRecvTime) >= s.config.PingTimeout {
 			return 0, ErrTimeout
 		}
@@ -93,30 +103,40 @@ func (s *Session) Ping() (time.Duration, error) {
 	return time.Now().Sub(start), nil
 }
 
-func (s *Session) closeRemoteStream(id uint32) error {
-	err := s.writeFrameNowait(newFrame(flagFIN, id, 0, nil))
+func (s *Session) closeRemoteStream(id uint32, sync bool) error {
+	var timeout <-chan time.Time
+	var err error
+	if sync {
+		err = s.writeFrame(newLenFrame(flagFIN, id, 0, nil), timeout)
+	} else {
+		err = s.writeFrameNowait(newLenFrame(flagFIN, id, 0, nil), timeout)
+	}
 	if nil != err {
-		logger.Printf("[WARN] pmux: failed to close remote: %v", err)
+		log.Printf("[WARN] pmux: failed to close remote: %v", err)
 	}
 	return err
 }
 
-func (s *Session) doWriteFrame(frame Frame, noWait bool) error {
-	// if frame.Header.Flags() != flagData {
-	// 	return s.writeFrameNowait(frame)
-	// }
-	timer := time.NewTimer(30 * time.Second)
-	defer timer.Stop()
-
+func (s *Session) doWriteFrame(frame LenFrame, noWait bool, timeout <-chan time.Time) error {
+	atomic.AddInt32(&s.sendingNum, 1)
+	if s.IsShutdown() {
+		atomic.AddInt32(&s.sendingNum, -1)
+		//putBytesToPool(frame)
+		return ErrSessionShutdown
+	}
+	defer atomic.AddInt32(&s.sendingNum, -1)
 	ready := sendReady{F: frame, Err: nil}
 	if !noWait {
 		ready.Err = make(chan error, 1)
 	}
+
 	select {
 	case s.sendCh <- ready:
 	case <-s.shutdownCh:
+		//putBytesToPool(frame)
 		return ErrSessionShutdown
-	case <-timer.C:
+	case <-timeout:
+		//putBytesToPool(frame)
 		return ErrConnectionWriteTimeout
 	}
 	if !noWait {
@@ -125,32 +145,33 @@ func (s *Session) doWriteFrame(frame Frame, noWait bool) error {
 			return err
 		case <-s.shutdownCh:
 			return ErrSessionShutdown
-		case <-timer.C:
+		case <-timeout:
 			return ErrConnectionWriteTimeout
 		}
 	}
 	return nil
 }
 
-func (s *Session) writeFrame(frame Frame) error {
-	return s.doWriteFrame(frame, false)
+func (s *Session) writeFrame(frame LenFrame, timeout <-chan time.Time) error {
+	return s.doWriteFrame(frame, false, timeout)
 }
 
-func (s *Session) writeFrameNowait(frame Frame) error {
-	return s.doWriteFrame(frame, true)
+func (s *Session) writeFrameNowait(frame LenFrame, timeout <-chan time.Time) error {
+	return s.doWriteFrame(frame, true, timeout)
 }
 
 func (s *Session) updateWindow(sid uint32, delta uint32) error {
-	frame := newFrame(flagWindowUpdate, sid, delta, nil)
-	return s.writeFrameNowait(frame)
+	var timeout <-chan time.Time
+	frame := newLenFrame(flagWindowUpdate, sid, delta, nil)
+	return s.writeFrameNowait(frame, timeout)
 }
 
 func (s *Session) incomingStream(id uint32) (*Stream, error) {
 	//s.streamLock.Lock()
 	ss := newStream(s, id)
 	if _, loaded := s.streams.LoadOrStore(id, ss); loaded {
-		logger.Printf("[ERR]: duplicate stream declared")
-		s.closeRemoteStream(id)
+		log.Printf("[ERR]: duplicate stream declared")
+		s.closeRemoteStream(id, false)
 		return nil, ErrDuplicateStream
 	}
 	atomic.AddInt32(&s.streamsCounter, 1)
@@ -192,7 +213,8 @@ func (s *Session) recv() {
 
 func (s *Session) resetCryptoContext(method string, iv uint64, wait bool) error {
 	if wait {
-		s.writeFrame(nil)
+		var timeout <-chan time.Time
+		s.writeFrame(nil, timeout)
 	}
 	ctx, err := NewCryptoContext(method, s.config.CipherKey, iv)
 	if nil != err {
@@ -208,19 +230,20 @@ func (s *Session) ResetCryptoContext(method string, iv uint64) error {
 }
 
 func (s *Session) recvFrame(reader io.Reader) (Frame, error) {
-	lenbuf := make([]byte, 4)
-	_, err := io.ReadAtLeast(reader, lenbuf, len(lenbuf))
+	//lenbuf := make([]byte, 4)
+	_, err := io.ReadAtLeast(reader, s.lenbuf[:], len(s.lenbuf))
 	if nil != err {
 		return nil, err
 	}
 	ctx := s.cryptoContext
-	length := binary.BigEndian.Uint32(lenbuf)
+	length := binary.BigEndian.Uint32(s.lenbuf[:])
 	length = ctx.decodeLength(length)
-	//logger.Printf("[Recv]Read len:%d %d %d", length, binary.BigEndian.Uint32(lenbuf), ctx.decryptCounter)
+	//log.Printf("[Recv]Read len:%d %d %d", length, binary.BigEndian.Uint32(lenbuf), ctx.decryptCounter)
 	if length > maxDataPacketSize {
 		return nil, ErrToolargeDataFrame
 	}
 	buf := make([]byte, length)
+	//buf := getBytesFromPool(int(length))
 	_, err = io.ReadAtLeast(reader, buf, len(buf))
 	if nil != err {
 		return nil, err
@@ -229,46 +252,54 @@ func (s *Session) recvFrame(reader io.Reader) (Frame, error) {
 	if nil != err {
 		return nil, err
 	}
+
 	frame := Frame(buf)
 	// frame := &Frame{}
 	// frame.Header = FrameHeader(buf[0:HeaderLenV1])
 	// frame.Body = buf[HeaderLenV1:]
-	//logger.Printf("[Recv]Read frame %d %d %d %d %d", length, frame.Header().Flags(), frame.Header().StreamID(), len(frame.Body()), ctx.decryptCounter)
+	//log.Printf("[Recv]Read frame %d %d %d %d %d", length, frame.Header().Flags(), frame.Header().StreamID(), len(frame.Body()), ctx.decryptCounter)
 	ctx.incDecryptCounter()
 	if frame.Header().Version() != FrameProtoVersion {
-		return nil, ErrInvalidVersion
+		return nil, fmt.Errorf("Invalid proto version:%d with data len:%d, flag:%d", frame.Header().Version(), length, frame.Header().Flags())
 	}
 
 	return frame, nil
 }
 
 func (s *Session) recvLoop() error {
-	for !s.shutdown {
+	for !s.IsShutdown() {
 		// Read the frame
 		var frame Frame
 		var err error
 		if frame, err = s.recvFrame(s.connReader); err != nil {
 			if err != io.EOF && !strings.Contains(err.Error(), "closed") && !strings.Contains(err.Error(), "reset by peer") {
-				logger.Printf("[ERROR]: Failed to read frame: %v while decrypt counter %d ", err, s.cryptoContext.decryptCounter)
+				log.Printf("[ERROR]: Failed to read frame: %v while decrypt counter %d ", err, s.cryptoContext.decryptCounter)
 			}
 			return err
 		}
 		s.lastRecvTime = time.Now()
-		//logger.Printf("####Recv %d", frame.Header.Flags())
+		//log.Printf("####Recv %d", frame.Header.Flags())
 		// Switch on the type
 		switch frame.Header().Flags() {
 		case flagData:
 			err = s.handleData(frame)
 		case flagSYN:
 			err = s.handleSYN(frame)
+			//putBytesToPool(frame)
 		case flagFIN:
 			err = s.handleFIN(frame)
+			//putBytesToPool(frame)
 		case flagWindowUpdate:
 			err = s.handleWindowUpdate(frame)
+			//putBytesToPool(frame)
 		case flagPing:
-			s.writeFrameNowait(newFrame(flagPingACK, frame.Header().StreamID(), 0, nil))
+			var timeout <-chan time.Time
+			s.writeFrameNowait(newLenFrame(flagPingACK, frame.Header().StreamID(), 0, nil), timeout)
+			//putBytesToPool(frame)
 		case flagPingACK:
 			asyncNotify(s.pingCh)
+			//fmt.Printf("####Recv flagPingACK\n")
+			//putBytesToPool(frame)
 		default:
 			return ErrInvalidMsgType
 
@@ -282,7 +313,7 @@ func (s *Session) handleWindowUpdate(frame Frame) error {
 	if nil != stream {
 		stream.incrSendWindow(frame)
 	} else {
-		s.closeRemoteStream(frame.Header().StreamID())
+		s.closeRemoteStream(frame.Header().StreamID(), false)
 	}
 	return nil
 }
@@ -290,21 +321,29 @@ func (s *Session) handleWindowUpdate(frame Frame) error {
 func (s *Session) handleData(frame Frame) error {
 	stream := s.getStream(frame.Header().StreamID())
 	if nil != stream {
-		return stream.offerData(frame.Body())
+		return stream.offerData(frame)
+	} else {
+		s.closeRemoteStream(frame.Header().StreamID(), false)
+		//putBytesToPool(frame)
 	}
-	s.closeRemoteStream(frame.Header().StreamID())
 	return nil
 }
 
 func (s *Session) handleSYN(frame Frame) error {
 	stream, err := s.incomingStream(frame.Header().StreamID())
 	if nil == err {
+		if !s.acceptable {
+			log.Printf("[WARN] pmux: close incoming stream since current session is not acceptable.")
+			stream.Close()
+			return nil
+		}
+		stream.state = streamAccepting
 		select {
 		case s.acceptCh <- stream:
 			return nil
 		default:
 			// Backlog exceeded! RST the stream
-			logger.Printf("[WARN] pmux: backlog exceeded:%d, forcing connection reset", len(s.acceptCh))
+			log.Printf("[WARN] pmux: backlog exceeded:%d, forcing connection reset", len(s.acceptCh))
 			stream.Close()
 		}
 		return nil
@@ -315,6 +354,7 @@ func (s *Session) handleSYN(frame Frame) error {
 func (s *Session) handleFIN(frame Frame) error {
 	stream := s.getStream(frame.Header().StreamID())
 	if nil != stream {
+		//log.Printf("[%d]passive close stream", stream.ID())
 		stream.forceClose(true)
 	}
 	return nil
@@ -338,24 +378,31 @@ func (s *Session) send() {
 		}
 		return frs, nil
 	}
-	for !s.shutdown {
+	for !s.IsShutdown() {
 		frs, err := readFrames()
+		var wbuffers net.Buffers
 		if nil == err {
 			for _, frame := range frs {
-				err = writeFrame(s.connWriter, frame.F, s.cryptoContext)
+				wbuffers, err = encodeFrameToBuffers(wbuffers, frame.F, s.cryptoContext)
+				//err = writeFrame(s.connWriter, frame.F, s.cryptoContext)
+				//putBytesToPool(frame.F)
 				if nil != err {
 					break
 				}
 			}
 		}
+		if len(wbuffers) > 0 {
+			_, err = wbuffers.WriteTo(s.connWriter)
+		}
 		for _, frame := range frs {
+			//putBytesToPool(frame.F)
 			if nil != frame.Err {
 				asyncSendErr(frame.Err, err)
 			}
 		}
 		if err != nil {
 			if err != ErrSessionShutdown {
-				logger.Printf("[ERR] pmux: Failed to write frames: %v", err)
+				log.Printf("[ERR] pmux: Failed to write frames: %v", err)
 			}
 			s.exitErr(err)
 			return
@@ -373,11 +420,10 @@ func (s *Session) Close() error {
 	s.shutdownLock.Lock()
 	defer s.shutdownLock.Unlock()
 
-	//logger.Printf("###Close sesion with %v", s.shutdown)
-	if s.shutdown {
+	if s.IsShutdown() {
 		return nil
 	}
-	s.shutdown = true
+	atomic.StoreInt32(&s.shutdown, 1)
 	if s.shutdownErr == nil {
 		s.shutdownErr = ErrSessionShutdown
 	}
@@ -396,20 +442,31 @@ func (s *Session) Close() error {
 		stream.forceClose(true)
 		return true
 	})
+	//for len(s.sendCh) > 0 {
+	//frame := <-s.sendCh
+	//putBytesToPool(frame.F)
+	//}
+	//RecycleBufReaderToPool(s.connReader)
+	for atomic.LoadInt32(&s.sendingNum) > 0 {
+		time.Sleep(10 * time.Nanosecond)
+	}
+	close(s.sendCh)
 	return nil
 }
 
 // AcceptStream is used to block until the next available stream
 // is ready to be accepted.
 func (s *Session) AcceptStream() (*Stream, error) {
-	if s.shutdown {
+	if s.IsShutdown() {
 		return nil, ErrSessionShutdown
 	}
+	s.acceptable = true
 	select {
 	case stream := <-s.acceptCh:
 		if nil == stream {
 			return nil, ErrSessionShutdown
 		}
+		stream.state = streamEstablished
 		return stream, nil
 	case <-s.shutdownCh:
 		return nil, ErrSessionShutdown
@@ -418,7 +475,7 @@ func (s *Session) AcceptStream() (*Stream, error) {
 
 // IsClosed does a safe check to see if we have shutdown
 func (s *Session) IsClosed() bool {
-	return s.shutdown
+	return s.IsShutdown()
 }
 
 // OpenStream is used to create a new stream
@@ -441,8 +498,8 @@ GET_ID:
 	stream := newStream(s, id)
 	s.streams.Store(id, stream)
 	atomic.AddInt32(&s.streamsCounter, 1)
-
-	err := s.writeFrame(newFrame(flagSYN, id, 0, nil))
+	var timeout <-chan time.Time
+	err := s.writeFrame(newLenFrame(flagSYN, id, 0, nil), timeout)
 	if nil != err {
 		return nil, err
 	}
@@ -452,7 +509,7 @@ GET_ID:
 func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
 	s := &Session{
 		config: config,
-		// logger:     logger.New(config.LogOutput, "", logger.LstdFlags),
+		// logger:     log.New(config.LogOutput, "", log.LstdFlags),
 		conn:       conn,
 		connReader: bufio.NewReader(conn),
 		connWriter: conn,
@@ -460,7 +517,7 @@ func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
 		//streams: make(map[uint32]*Stream),
 		// inflight:   make(map[uint32]struct{}),
 		// synCh:      make(chan struct{}, config.AcceptBacklog),
-		acceptCh: make(chan *Stream, 64),
+		acceptCh: make(chan *Stream, 8),
 		sendCh:   make(chan sendReady, config.WriteQueueLimit),
 		// recvDoneCh: make(chan struct{}),
 		shutdownCh: make(chan struct{}),

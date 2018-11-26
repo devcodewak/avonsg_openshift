@@ -201,6 +201,7 @@ func NewSocksConn(c net.Conn) (*SocksConn, *bufio.Reader, error) {
 	conn := new(SocksConn)
 	conn.Conn = c
 	bio := bufio.NewReader(c)
+	//bio := pmux.NewBufReaderFromPool(c)
 	// Determine which SOCKS version the client is using and branch on it.
 	if version, err := socksPeekByte(bio); err != nil {
 		//conn.Close()
@@ -210,7 +211,7 @@ func NewSocksConn(c net.Conn) (*SocksConn, *bufio.Reader, error) {
 		conn.socksVersion = socks4Version
 		conn.Req, err = readSocks4aConnect(bio)
 		if err != nil {
-			conn.Close()
+			//conn.Close()
 			return nil, nil, err
 		}
 	} else if version == socks5Version {
@@ -218,7 +219,7 @@ func NewSocksConn(c net.Conn) (*SocksConn, *bufio.Reader, error) {
 		rw := bufio.NewReadWriter(bio, bufio.NewWriter(conn))
 		conn.Req, err = socks5Handshake(rw)
 		if err != nil {
-			conn.Close()
+			//conn.Close()
 			return nil, nil, err
 		}
 	} else {

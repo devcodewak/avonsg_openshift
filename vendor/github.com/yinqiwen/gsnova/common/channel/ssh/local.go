@@ -24,12 +24,25 @@ type sshStream struct {
 	latestIOTime time.Time
 }
 
+func (tc *sshStream) SetReadDeadline(t time.Time) error {
+	if nil == tc.Conn {
+		return io.EOF
+	}
+	return tc.Conn.SetReadDeadline(t)
+}
+func (tc *sshStream) SetWriteDeadline(t time.Time) error {
+	if nil == tc.Conn {
+		return io.EOF
+	}
+	return tc.Conn.SetWriteDeadline(t)
+}
+
 func (s *sshStream) LatestIOTime() time.Time {
 	return s.latestIOTime
 }
 
-func (tc *sshStream) Auth(req *mux.AuthRequest) error {
-	return nil
+func (tc *sshStream) Auth(req *mux.AuthRequest) *mux.AuthResponse {
+	return &mux.AuthResponse{Code: mux.AuthOK}
 }
 
 func (tc *sshStream) Connect(network string, addr string, opt mux.StreamOptions) error {
@@ -87,6 +100,13 @@ type sshMuxSession struct {
 	streams      map[*sshStream]bool
 	streamsMutex sync.Mutex
 	sshClient    *ssh.Client
+}
+
+func (s *sshMuxSession) RemoteAddr() net.Addr {
+	return nil
+}
+func (s *sshMuxSession) LocalAddr() net.Addr {
+	return nil
 }
 
 func (tc *sshMuxSession) getSSHClient() *ssh.Client {

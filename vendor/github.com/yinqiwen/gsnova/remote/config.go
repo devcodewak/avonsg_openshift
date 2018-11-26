@@ -12,16 +12,18 @@ type ServerListenConfig struct {
 }
 
 type ServerConfig struct {
-	Cipher channel.CipherConfig
-	Mux    channel.MuxConfig
-	Log    []string
-	Server []ServerListenConfig
+	Cipher     channel.CipherConfig
+	RateLimit  channel.RateLimitConfig
+	ProxyLimit channel.ProxyLimitConfig
+	Mux        channel.MuxConfig
+	Log        []string
+	Server     []ServerListenConfig
 }
 
 var ServerConf ServerConfig
 
 func InitDefaultConf() {
-	ServerConf.Mux.StreamIdleTimeout = 90 //10
+	ServerConf.Mux.StreamIdleTimeout = 90    //10
 	ServerConf.Mux.SessionIdleTimeout = 1800 //300
 	for _, lis := range ServerConf.Server {
 		lis.KCParams.InitDefaultConf()

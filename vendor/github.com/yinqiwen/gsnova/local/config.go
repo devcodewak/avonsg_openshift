@@ -19,6 +19,7 @@ const (
 	BlockedByGFWRule = "BlockedByGFW"
 	InHostsRule      = "InHosts"
 	IsCNIPRule       = "IsCNIP"
+	IsPrivateIPRule  = "IsPrivateIP"
 )
 
 func matchHostnames(pattern, host string) bool {
@@ -116,6 +117,12 @@ func (pac *PACConfig) matchRules(ip string, req *http.Request) bool {
 				}
 				logger.Debug("ip:%s is CNIP:%v", ip, ok)
 			}
+		} else if strings.EqualFold(rule, IsPrivateIPRule) {
+			if len(ip) == 0 {
+				ok = false
+			} else {
+				ok = helper.IsPrivateIP(ip)
+			}
 		} else {
 			logger.Error("###Invalid rule:%s", rule)
 		}
@@ -187,10 +194,12 @@ func (dump *HTTPDumpConfig) MatchDomain(host string) bool {
 }
 
 type ProxyConfig struct {
-	Local    string
-	MITM     bool //Man-in-the-middle
-	HTTPDump HTTPDumpConfig
-	PAC      []PACConfig
+	Local       string
+	Forward     string
+	MITM        bool //Man-in-the-middle
+	Transparent bool
+	HTTPDump    HTTPDumpConfig
+	PAC         []PACConfig
 }
 
 func (cfg *ProxyConfig) getProxyChannelByHost(proto string, host string) string {
@@ -200,10 +209,10 @@ func (cfg *ProxyConfig) getProxyChannelByHost(proto string, host string) string 
 
 func (cfg *ProxyConfig) findProxyChannelByRequest(proto string, ip string, req *http.Request) string {
 	var channelName string
-	if len(ip) > 0 && helper.IsPrivateIP(ip) {
-		//channel = "direct"
-		return channel.DirectChannelName
-	}
+	// if len(ip) > 0 && helper.IsPrivateIP(ip) {
+	// 	//channel = "direct"
+	// 	return channel.DirectChannelName
+	// }
 	for _, pac := range cfg.PAC {
 		if pac.Match(proto, ip, req) {
 			channelName = pac.Remote
@@ -255,7 +264,9 @@ type LocalConfig struct {
 	Log             []string
 	Cipher          channel.CipherConfig
 	Mux             channel.MuxConfig
+	ProxyLimit      channel.ProxyLimitConfig
 	UserAgent       string
+	UPNPExposePort  int
 	LocalDNS        dns.LocalDNSConfig
 	UDPGW           UDPGWConfig
 	SNI             SNIConfig
@@ -282,6 +293,7 @@ func (cfg *LocalConfig) init() error {
 		}
 		GConf.Channel[i].Adjust()
 	}
+
 	if !haveDirect {
 		directProxyChannel := make([]channel.ProxyChannelConfig, 1)
 		directProxyChannel[0].Name = channel.DirectChannelName

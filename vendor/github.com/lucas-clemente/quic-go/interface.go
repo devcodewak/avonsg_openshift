@@ -17,7 +17,10 @@ type StreamID = protocol.StreamID
 type VersionNumber = protocol.VersionNumber
 
 // A Cookie can be used to verify the ownership of the client address.
-type Cookie = handshake.Cookie
+type Cookie struct {
+	RemoteAddr string
+	SentTime   time.Time
+}
 
 // ConnectionState records basic details about the QUIC connection.
 type ConnectionState = handshake.ConnectionState
@@ -118,6 +121,8 @@ type Session interface {
 	AcceptUniStream() (ReceiveStream, error)
 	// OpenStream opens a new bidirectional QUIC stream.
 	// It returns a special error when the peer's concurrent stream limit is reached.
+	// There is no signaling to the peer about new streams:
+	// The peer can only accept the stream after data has been sent on the stream.
 	// TODO(#1152): Enable testing for the special error
 	OpenStream() (Stream, error)
 	// OpenStreamSync opens a new bidirectional QUIC stream.
@@ -134,8 +139,11 @@ type Session interface {
 	LocalAddr() net.Addr
 	// RemoteAddr returns the address of the peer.
 	RemoteAddr() net.Addr
-	// Close closes the connection. The error will be sent to the remote peer in a CONNECTION_CLOSE frame. An error value of nil is allowed and will cause a normal PeerGoingAway to be sent.
-	Close(error) error
+	// Close the connection.
+	io.Closer
+	// Close the connection with an error.
+	// The error must not be nil.
+	CloseWithError(ErrorCode, error) error
 	// The context is cancelled when the session is closed.
 	// Warning: This API should not be considered stable and might change soon.
 	Context() context.Context
@@ -150,10 +158,13 @@ type Config struct {
 	// If not set, it uses all versions available.
 	// Warning: This API should not be considered stable and will change soon.
 	Versions []VersionNumber
-	// Ask the server to omit the connection ID sent in the Public Header.
-	// This saves 8 bytes in the Public Header in every packet. However, if the IP address of the server changes, the connection cannot be migrated.
-	// Currently only valid for the client.
-	RequestConnectionIDOmission bool
+	// The length of the connection ID in bytes.
+	// It can be 0, or any value between 4 and 18.
+	// If not set, the interpretation depends on where the Config is used:
+	// If used for dialing an address, a 0 byte connection ID will be used.
+	// If used for a server, or dialing on a packet conn, a 4 byte connection ID will be used.
+	// When dialing on a packet conn, the ConnectionIDLength value must be the same for every Dial call.
+	ConnectionIDLength int
 	// HandshakeTimeout is the maximum duration that the cryptographic handshake may take.
 	// If the timeout is exceeded, the connection is closed.
 	// If this value is zero, the timeout is set to 10 seconds.
@@ -177,13 +188,10 @@ type Config struct {
 	// MaxIncomingStreams is the maximum number of concurrent bidirectional streams that a peer is allowed to open.
 	// If not set, it will default to 100.
 	// If set to a negative value, it doesn't allow any bidirectional streams.
-	// Values larger than 65535 (math.MaxUint16) are invalid.
 	MaxIncomingStreams int
 	// MaxIncomingUniStreams is the maximum number of concurrent unidirectional streams that a peer is allowed to open.
-	// This value doesn't have any effect in Google QUIC.
 	// If not set, it will default to 100.
 	// If set to a negative value, it doesn't allow any unidirectional streams.
-	// Values larger than 65535 (math.MaxUint16) are invalid.
 	MaxIncomingUniStreams int
 	// KeepAlive defines whether this peer will periodically send PING frames to keep the connection alive.
 	KeepAlive bool

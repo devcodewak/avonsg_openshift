@@ -2,6 +2,7 @@ package channel
 
 import (
 	"encoding/json"
+	"errors"
 	"net/url"
 	"path/filepath"
 	"runtime"
@@ -13,6 +14,44 @@ import (
 	"github.com/yinqiwen/pmux"
 )
 
+var ErrNotSupportedOperation = errors.New("Not supported operation")
+
+type ProxyLimitConfig struct {
+	WhiteList []string
+	BlackList []string
+}
+
+func (limit *ProxyLimitConfig) Allowed(host string) bool {
+	if len(limit.WhiteList) == 0 && len(limit.BlackList) == 0 {
+		return true
+	}
+	if len(limit.BlackList) > 0 {
+		for _, rule := range limit.BlackList {
+			if rule == "*" {
+				return false
+			} else {
+				matched, _ := filepath.Match(rule, host)
+				if matched {
+					return false
+				}
+			}
+		}
+		return true
+	}
+
+	for _, rule := range limit.WhiteList {
+		if rule == "*" {
+			return true
+		} else {
+			matched, _ := filepath.Match(rule, host)
+			if matched {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type FeatureSet struct {
 	AutoExpire bool
 	Pingable   bool
@@ -23,6 +62,8 @@ type MuxConfig struct {
 	StreamMinRefresh   string
 	StreamIdleTimeout  int
 	SessionIdleTimeout int
+	UpBufferSize       int
+	DownBufferSize     int
 }
 
 func (m *MuxConfig) ToPMuxConf() *pmux.Config {
@@ -91,6 +132,10 @@ func (conf *CipherConfig) VerifyUser(user string) bool {
 	}
 	logger.Error("[ERROR]Invalid user:%s", user)
 	return false
+}
+
+type RateLimitConfig struct {
+	Limit map[string]string
 }
 
 type HTTPBaseConfig struct {
@@ -206,6 +251,8 @@ type ProxyChannelConfig struct {
 	Hops                   HopServers
 	RemoteSNIProxy         map[string]string
 	HibernateAfterSecs     int
+	P2PToken               string
+	P2S2PEnable            bool
 
 	proxyURL    *url.URL
 	lazyConnect bool
@@ -279,9 +326,13 @@ func (c *ProxyChannelConfig) ProxyURL() *url.URL {
 
 //var DefaultCipherKey string
 var defaultMuxConfig MuxConfig
+var defaultProxyLimitConfig ProxyLimitConfig
 
 func SetDefaultMuxConfig(cfg MuxConfig) {
 	defaultMuxConfig = cfg
+}
+func SetDefaultProxyLimitConfig(cfg ProxyLimitConfig) {
+	defaultProxyLimitConfig = cfg
 }
 
 func InitialPMuxConfig(cipher *CipherConfig) *pmux.Config {

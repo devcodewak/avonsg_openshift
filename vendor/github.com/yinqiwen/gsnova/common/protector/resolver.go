@@ -3,13 +3,14 @@ package protector
 import (
 	"crypto/rand"
 	"errors"
+
+	//"log"
 	"math/big"
 	"net"
 	"time"
 
-	"github.com/yinqiwen/gsnova/common/logger"
-
 	"github.com/miekg/dns"
+	"github.com/yinqiwen/gsnova/common/logger"
 )
 
 type DNSRecord struct {
