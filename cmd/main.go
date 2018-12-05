@@ -101,7 +101,7 @@ func main() {
 	flag.Parse()
 
 	if *version {
-		fmt.Printf("Avonsg version:%s\n", channel.Version)
+		fmt.Printf("Avonsg version:%s %s\n", channel.Version, runtime.Version())
 		return
 	}
 
