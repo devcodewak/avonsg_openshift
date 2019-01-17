@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"net/http"
+	"runtime"
 	"sync/atomic"
 	"time"
 
@@ -172,7 +173,7 @@ func StartProxy() error {
 		logger.Notice("Create MITM Root CA:%v", err)
 	}
 
-	logger.Info("Started GSnova %s.", channel.Version)
+	logger.Info("Started GSnova %s, %s.", channel.Version, runtime.Version())
 
 	go startAdminServer()
 	startLocalServers()

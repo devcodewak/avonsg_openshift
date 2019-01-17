@@ -74,6 +74,15 @@ func (ss *http2Handler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 }
 
 func servHTTP2(lp net.Listener, addr string, config *tls.Config) {
+
+	config.MaxVersion = tls.VersionTLS13
+	config.MinVersion = tls.VersionTLS12
+	// config.CipherSuites = []uint16{
+	// 	tls.TLS_AES_128_GCM_SHA256,
+	// 	tls.TLS_AES_256_GCM_SHA384,
+	// 	tls.TLS_CHACHA20_POLY1305_SHA256,
+	// }
+
 	for {
 		conn, err := lp.Accept()
 		if nil != err {
